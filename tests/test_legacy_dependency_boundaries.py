@@ -9,10 +9,10 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 # gridMode=flexy is intentionally omitted; it remains active behavior for a later branch.
 DEPRECATED_MODULES = {
     "advisor",
-    "engine_trend",
 }
 REMOVED_LEGACY_MODULES = {
     "control_bot",
+    "engine_trend",
     "grid_engine_honest",
     "grid_engine_honest_v2",
 }
