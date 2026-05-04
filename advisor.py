@@ -192,7 +192,7 @@ def main() -> None:
     tg_token = os.getenv("TELEGRAM_CONTROL_BOT_TOKEN")
 
     # Use prod market data by default; testnet klines can have absurd wicks.
-    client = BinanceSpotREST(base_url=base_url, api_key=api_key, api_secret=api_secret)
+    _client = BinanceSpotREST(base_url=base_url, api_key=api_key, api_secret=api_secret)
     md = BinanceSpotREST(base_url=md_url, api_key=api_key, api_secret=api_secret)
 
     _log("ADVISOR_START")

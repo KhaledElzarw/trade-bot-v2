@@ -868,7 +868,7 @@ def main():
     interval = state.get("interval", "15m")
 
     # Trading client (testnet/prod depending on env)
-    client = BinanceSpotREST(base_url=base_url, api_key=api_key, api_secret=api_secret)
+    _client = BinanceSpotREST(base_url=base_url, api_key=api_key, api_secret=api_secret)
     # Market-data client (prod by default)
     md = BinanceSpotREST(base_url=md_url, api_key=api_key, api_secret=api_secret)
 
