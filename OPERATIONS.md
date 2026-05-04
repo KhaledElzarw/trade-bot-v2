@@ -1,15 +1,30 @@
 # Tradebot Operations Runbook
 
-This runbook describes safe local operation for the tradebot repository. It is
-documentation only; operational behavior is controlled by the application code
-and local environment configuration.
+## Operating principles
 
-Trading automation is high risk. Start with smoke tests and testnet or paper
-flows before using any configuration that can affect live funds.
+This runbook describes local operation for the tradebot repository. It does not
+change application behavior, runtime paths, trading strategy, or execution
+logic.
 
-## Operating Modes
+Trading automation is high risk. Start with smoke tests and paper/testnet
+operation before considering any live-risk workflow. Do not treat a successful
+testnet, paper, dry-run, dashboard, Telegram, or AI sidecar workflow as proof
+that live trading is safe.
 
-### Smoke Test
+Core operating rules:
+
+- Keep real secrets in local `.env` files or deployment secret storage only.
+- Do not commit runtime files, logs, PID files, SQLite databases, or JSON/JSONL
+  mirrors.
+- Prefer the orchestrator for normal local service start, stop, and status.
+- Use direct component commands only for debugging.
+- Back up runtime state before upgrades, migration work, or recovery work.
+- Do not paste secret values into issues, commits, logs, screenshots, or ZIP
+  archives.
+
+## Operating modes
+
+### Smoke test
 
 Use the smoke test to verify Python dependencies, Binance connectivity, server
 time, authentication, balances, and market data without starting long-running
@@ -20,24 +35,23 @@ source .venv/bin/activate
 python bot.py
 ```
 
-Fill in local Binance credentials in `.env` before running authenticated smoke
-checks. Do not commit `.env`.
+Authenticated checks require local Binance credentials in `.env`. Do not commit
+`.env`.
 
-### Paper/Testnet
+### Paper/testnet
 
-The default examples are testnet-oriented. Confirm the intended exchange base
-URL, symbol, API key permissions, and runtime database path before starting the
-engine. Testnet and paper-style operation reduce risk, but they do not prove
-that live trading is safe.
+The repository examples are testnet-oriented. Confirm the intended exchange base
+URL, symbol, API key permissions, and local runtime database path before
+starting the engine.
 
-Initialize or backfill local runtime storage when needed:
+Optional/manual storage migration or backfill command:
 
 ```bash
 python migrate_to_sqlite.py
 ```
 
-The dashboard freshness path uses SQLite in WAL mode. Set `TRADEBOT_DB_PATH`
-only when you want a non-default local runtime database path.
+This command writes local runtime storage. Run it only when intentionally
+initializing, migrating, or backfilling the local SQLite store.
 
 ### Dashboard
 
@@ -49,100 +63,74 @@ Default local URL:
 http://localhost:8844/
 ```
 
-When opening from Codex's in-app browser, use the machine address if `localhost`
-resolves to an isolated webview namespace:
+Set `TRADEBOT_DASHBOARD_TOKEN` when the dashboard is not localhost-only. When a
+dashboard token is configured, use a placeholder-style URL like:
 
 ```text
-http://192.168.1.21:8844/
+http://localhost:8844/?token=<dashboard-token>
 ```
 
-Set `TRADEBOT_DASHBOARD_TOKEN` to protect write endpoints. When set, open the
-dashboard with:
+Do not expose the dashboard publicly without authentication/token controls.
+Dashboard write endpoints are sensitive operational controls.
 
-```text
-http://192.168.1.21:8844/?token=<dashboard-token>
-```
+### AI sidecar
 
-Read endpoints remain available for monitoring. Mutations to `/api/control` and
-`/api/config` require the token.
-
-Realtime contract:
-
-- `/api/dashboard`: heavy boot/config/intelligence snapshot.
-- `/api/market`: polling fallback for light status/runtime/events and optional
-  chart seed.
-- `/api/live/events`: SSE for engine/runtime/status/events only.
-- `/ws/chart`: websocket for chart ticks only.
-
-Every realtime payload carries `schemaVersion`, `channel`, `seq`, and
-`serverTimeUtc`; the browser ignores stale out-of-order sequence ids.
-Intelligence/news is cached separately so slow feeds do not block chart/status
-freshness.
-
-SSE sends compact panel data:
-
-- First frame: `eventsPatch.mode=snapshot` and `ordersPatch.mode=snapshot`.
-- Later frames: `eventsPatch.mode=delta` with new events after the last event
-  cursor, and `ordersPatch.mode=delta` with order `upsert`/`remove` operations.
-- Polling fallback endpoints still return complete snapshots so recovery is
-  simple.
-
-### AI Sidecar
-
-The AI sidecar uses a local OpenAI-compatible endpoint by default. For Ollama,
-set the base URL to your local `/v1` endpoint:
+The AI sidecar uses a local OpenAI-compatible endpoint by default. Example
+placeholder configuration:
 
 ```text
 TRADEBOT_AI_BASE_URL=http://127.0.0.1:11434/v1
+TRADEBOT_AI_PROVIDER=ollama
 TRADEBOT_AI_MODEL=qwen3.5:9b
 ```
 
-The dashboard can pause/resume AI assist, switch the provider/base URL, and
-choose quick/deep/fallback models. It includes these named Ollama endpoints:
+AI decisions are advisory unless existing engine configuration explicitly
+consumes them. Do not treat AI output as a guarantee of safe or profitable
+trading.
 
-- Local: `http://127.0.0.1:11434/v1`
-- Battlestation GPU: `http://192.168.1.20:11435/v1`
-- Battlestation CPU: `http://192.168.1.20:11436/v1`
-
-Dry-run and shadow decisions are displayed and logged but not enforced by the
-engine.
-
-Run a one-off review without changing the active signal:
+One-off review command:
 
 ```bash
 python ai_playground.py
 ```
 
-Write one review as the current engine signal:
+Optional/manual command that writes the current engine signal:
 
 ```bash
 python ai_playground.py --write-signal
 ```
 
-### Telegram Control Bot
+Run the write-signal command only when you intentionally want to update local AI
+signal runtime state.
+
+### Telegram control bot
 
 The Telegram control bot provides operator commands through Telegram. Configure
-the bot token and admin user ID in local environment files only. Do not commit
-Telegram tokens, screenshots that reveal tokens, or exported chat logs with
-operational secrets.
+the bot token and admin user ID in local environment files or deployment secret
+storage only.
 
-Run directly only when debugging:
+Direct debug command:
 
 ```bash
 python control_bot.py
 ```
 
-## Startup Commands
+Do not commit Telegram tokens, screenshots that reveal tokens, or exported chat
+logs with operational secrets.
 
-Use the service orchestrator for normal local operations so the engine,
-dashboard, and AI sidecar move together:
+## Startup commands
+
+Use the service orchestrator for normal local operation:
 
 ```bash
 source .venv/bin/activate
 python dashboard_orchestrator.py start
 ```
 
-Run individual components directly only for debugging:
+This starts local services and may write logs, PID files, SQLite state, and
+JSON/JSONL runtime mirrors.
+
+Run individual components directly only when debugging:
 
 ```bash
 python engine.py
@@ -151,21 +139,18 @@ python control_bot.py
 python ai_sidecar.py
 ```
 
-The older detached wrappers still exist as implementation details, but
-operators should prefer `dashboard_orchestrator.py`.
+## Shutdown commands
 
-## Shutdown Commands
-
-Stop services explicitly through the orchestrator:
+Stop orchestrated services explicitly:
 
 ```bash
 python dashboard_orchestrator.py stop
 ```
 
-Use direct process stops only when you have confirmed which process is running
+Use manual process termination only after confirming which process is running
 and why the orchestrator is not suitable.
 
-## Status Checks
+## Status checks
 
 Check orchestrated services:
 
@@ -173,11 +158,12 @@ Check orchestrated services:
 python dashboard_orchestrator.py status
 ```
 
-Check detached wrapper status when diagnosing stale processes:
+Check detached wrapper status while diagnosing stale processes:
 
 ```bash
-python run_dashboard_detached.py status
 python run_engine_detached.py status
+python run_dashboard_detached.py status
+python run_ai_sidecar_detached.py status
 ```
 
 Check dashboard response:
@@ -186,30 +172,30 @@ Check dashboard response:
 curl -s http://localhost:8844/api/dashboard
 ```
 
-Inspect local process state without printing secrets:
+Inspect local processes without printing secrets:
 
 ```bash
 ps -ef | grep -E 'engine.py|dashboard_server.py|ai_sidecar.py|control_bot.py'
 ```
 
-## Runtime Files
+## Runtime files
 
-Runtime files are local artifacts, not source code. They are ignored by Git and
-must not be committed.
+Runtime files are local-only artifacts. They are not source code and must not be
+committed. See [docs/runtime-artifacts.md](docs/runtime-artifacts.md) for the
+full runtime artifact policy.
 
 ### SQLite DB
 
-SQLite is the canonical operational store:
+SQLite is the canonical local runtime store:
 
 - `tradebot.sqlite3`
 - `tradebot.sqlite3-wal`
 - `tradebot.sqlite3-shm`
 
-### JSON Compatibility Mirrors
+### JSON compatibility mirrors
 
-The JSON/JSONL files below are maintained as compatibility mirrors during the
-SQLite cutover and can be used as rollback input by re-running
-`python migrate_to_sqlite.py` against a fresh database:
+JSON and JSONL files remain compatibility mirrors for selected runtime flows and
+recovery/migration workflows:
 
 - `state.json`
 - `state_trend.json`
@@ -234,7 +220,7 @@ Logs are local runtime artifacts:
 - `engine_trend.log`
 - `*.nohup.out`
 
-### PID Files
+### PID files
 
 PID files are local process markers:
 
@@ -243,48 +229,49 @@ PID files are local process markers:
 - `ai_sidecar.pid`
 - `*.pid`
 
-## Backup Guidance
+## Backup guidance
 
-Back up runtime state before upgrades, migrations, or recovery work:
+Back up local runtime state before upgrades, migration work, cleanup, or
+recovery:
 
-1. Stop services with `python dashboard_orchestrator.py stop`.
-2. Copy `tradebot.sqlite3` and any `tradebot.sqlite3-wal` or
-   `tradebot.sqlite3-shm` files to a private backup location.
-3. Copy JSON/JSONL compatibility mirrors if you need rollback context.
-4. Keep backups out of Git and outside public ZIP archives.
-5. Record backup time, branch, and commit hash without recording secret values.
+1. Stop services when possible with `python dashboard_orchestrator.py stop`.
+2. Copy `tradebot.sqlite3` and matching WAL/SHM files when present.
+3. Copy JSON/JSONL mirrors if they are needed for rollback or comparison.
+4. Copy logs only when needed for troubleshooting or audit.
+5. Store backups outside Git in a private local or deployment-managed location.
+6. Record branch, commit hash, timestamp, and reason for the backup without
+   recording secret values.
 
-## Recovery Guidance
+## Restore/recovery guidance
 
-If the dashboard shows stale data:
+Restore local runtime state carefully:
 
-1. Run `python dashboard_orchestrator.py status`.
-2. Check `curl -s http://localhost:8844/api/dashboard`.
-3. If the shell endpoint is live but the in-app browser is stale, switch the
-   browser to the machine address shown by `hostname -I`.
-4. Inspect logs locally without pasting secret values into issues or commits.
-5. Restart intentionally only after confirming whether the engine, dashboard,
-   and AI sidecar are already running.
+1. Stop services.
+2. Back up the current runtime files before replacing anything.
+3. Restore the intended SQLite database and matching WAL/SHM files if needed.
+4. Restore JSON/JSONL mirrors only when they are part of the intended recovery.
+5. Start services.
+6. Run status checks.
+7. Review logs locally without printing secret values into public channels.
 
-If pid files are stale, use `status` to inspect and `restart` only when you
-intentionally want to replace the process.
+If the dashboard appears stale, check orchestrator status, dashboard response,
+and local logs before restarting services.
 
-## How To Rotate Secrets
+## Secret rotation
 
-Rotate secrets immediately if they were committed, logged, shared in a ZIP, or
-shown in screenshots:
+Rotate secrets immediately if they were committed, logged, screenshotted, shared
+in a ZIP, or exposed outside the trusted operating environment:
 
-1. Revoke the exposed Binance API key, Telegram bot token, dashboard token, or
-   other affected credential at the provider.
+1. Revoke the exposed credential at the provider.
 2. Create a replacement credential with minimum required permissions.
 3. Update local `.env` files and deployment secret storage.
 4. Restart affected services.
 5. Verify status without printing secret values.
 6. Review recent exchange, Telegram, and dashboard activity for unexpected use.
 
-## Troubleshooting Failed Tests
+## Troubleshooting failed tests
 
-Run the test suite from the project virtual environment:
+Run tests from the project virtual environment:
 
 ```bash
 source .venv/bin/activate
@@ -297,40 +284,44 @@ If `pytest` is missing, install development dependencies:
 python -m pip install -r requirements-dev.txt
 ```
 
-If `python3 -m pip` is unavailable on the system Python, use the virtual
-environment created by:
+If `python3 -m pip` is unavailable on the system Python, create and activate a
+virtual environment:
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 ```
 
-If a hygiene test fails, review the listed tracked file paths. Do not print or
-paste file contents if the path may contain secrets or runtime state.
+If a hygiene test fails, review only the listed file paths first. Do not print
+or paste file contents when the path may contain secrets or runtime state.
 
-## Troubleshooting Missing Dashboard, Control Bot, or AI Sidecar
-
-For the dashboard:
+## Troubleshooting dashboard
 
 - Check `python dashboard_orchestrator.py status`.
 - Check `TRADEBOT_DASHBOARD_HOST` and `TRADEBOT_DASHBOARD_PORT`.
 - Confirm firewall or network rules if using a non-localhost host.
 - Set `TRADEBOT_DASHBOARD_TOKEN` when the dashboard is not localhost-only.
+- Check `curl -s http://localhost:8844/api/dashboard`.
+- Review dashboard logs locally without printing secret values.
 
-For the Telegram control bot:
+## Troubleshooting Telegram control bot
 
 - Confirm the local environment contains a bot token and admin user ID.
 - Confirm the running process is `control_bot.py`.
-- Check network access to Telegram without printing token values.
+- Confirm network access to Telegram.
+- Review logs locally without printing token values.
+- Rotate the bot token if it may have been exposed.
 
-For the AI sidecar:
+## Troubleshooting AI sidecar
 
 - Confirm the local AI endpoint is reachable.
 - Confirm `TRADEBOT_AI_BASE_URL` points to the endpoint `/v1` path.
-- Confirm the configured model exists locally.
+- Confirm `TRADEBOT_AI_PROVIDER` and `TRADEBOT_AI_MODEL` match the local
+  provider and installed model.
 - Run `python ai_playground.py` for a one-off review.
+- Review AI runtime files locally without committing them.
 
-## What Not To Commit
+## What not to commit
 
 Never commit:
 
@@ -343,26 +334,26 @@ Never commit:
 - `.venv`, `__pycache__`, `.pytest_cache`, and other cache folders.
 - Screenshots, exports, or ZIP files that contain secrets or runtime state.
 
-## Safe Upgrade Process
+## Safe upgrade process
 
 Use a conservative upgrade process:
 
 1. Confirm the working tree is clean or intentionally preserved on another
    branch or stash.
 2. Back up runtime files.
-3. Review dependency, migration, and configuration changes before running
-   services.
+3. Review dependency, migration, configuration, and documentation changes before
+   running services.
 4. Install dependencies in a virtual environment.
 5. Run `python -m pytest -q`.
 6. Run `python -m compileall -q .`.
-7. Run `python bot.py` against the intended testnet or smoke-test environment.
+7. Run `python bot.py` against the intended smoke-test environment.
 8. Start services with `python dashboard_orchestrator.py start`.
 9. Check dashboard, engine, AI sidecar, and Telegram control status.
-10. Monitor logs and runtime state before considering live-risk operation.
+10. Monitor logs and runtime state before considering any live-risk operation.
 
-## Deprecated Baserow Path
+## Deprecated Baserow path
 
-Baserow is no longer used for live engine/dashboard freshness. The Baserow
-scripts remain available only for manual legacy export/cleanup work, and
-`TRADEBOT_BASEROW_SYNC` should stay disabled unless explicitly required for a
-legacy task.
+Baserow is deprecated for live engine/dashboard freshness. The Baserow variables
+and scripts are legacy/manual-export paths unless explicitly enabled for a
+specific task. Keep `TRADEBOT_BASEROW_SYNC` disabled unless a legacy workflow
+requires it.
