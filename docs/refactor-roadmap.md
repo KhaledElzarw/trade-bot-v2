@@ -99,7 +99,7 @@ branch explicitly authorizes the work:
 - Telegram operator command behavior.
 - Runtime file paths.
 - Legacy/research script locations.
-- Baserow or migration tool behavior.
+- Migration tool behavior.
 - `src/` package layout.
 - CI enforcement thresholds.
 
@@ -135,7 +135,7 @@ Recommended next-phase branches, in order:
    - Avoid engine, execution, migration, and legacy script behavior changes.
 
 7. `chore/ruff-e501-migration-tools`
-   - Wrap migration and Baserow tooling separately.
+   - Wrap migration tooling separately.
    - Preserve payload shapes, CLI behavior, and documented manual commands.
 
 8. `refactor/wrapper-runner-dedup`
@@ -186,8 +186,9 @@ Before moving legacy or research scripts:
 - Move files only in a dedicated branch with no logic changes.
 
 `engine_trend.py`, `advisor.py`, `grid_engine_honest.py`,
-`grid_engine_honest_v2.py`, and migration/Baserow tools should remain in place
-until their ownership and expected behavior are confirmed.
+`grid_engine_honest_v2.py`, and migration tools should remain in place until
+their ownership and expected behavior are confirmed. Legacy Baserow tooling has
+been removed.
 
 ## Prerequisites Before `src/` Layout Migration
 

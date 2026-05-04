@@ -9,16 +9,12 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 # gridMode=flexy is intentionally omitted; it remains active behavior for a later branch.
 DEPRECATED_MODULES = {
     "advisor",
-    "baserow_sync",
-    "clean_baserow_tradebot_db",
     "control_bot",
     "engine_trend",
     "grid_engine_honest",
     "grid_engine_honest_v2",
-    "migrate_to_baserow",
-    "prune_tradebot_order_grid_rows",
 }
-DEPRECATED_SERVICE_MARKERS = tuple(sorted(DEPRECATED_MODULES | {"baserow"}))
+DEPRECATED_SERVICE_MARKERS = tuple(sorted(DEPRECATED_MODULES))
 
 CORE_PYTHON_FILES = {
     "ai_sidecar.py",

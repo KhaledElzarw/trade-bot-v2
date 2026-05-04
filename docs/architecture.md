@@ -180,7 +180,8 @@ Current known debt:
 - Dashboard server responsibilities are broad.
 - AI prompt, schema, memory, and sidecar responsibilities are still closely
   coupled.
-- Some legacy Baserow scripts remain for manual/export workflows.
+- Legacy Baserow sync/export scripts have been removed; SQLite is the supported
+  local runtime store.
 - Service wrappers and orchestration have overlapping process-management
   concerns.
 

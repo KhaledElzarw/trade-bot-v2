@@ -1,5 +1,4 @@
 import json
-import inspect
 
 import pytest
 
@@ -328,11 +327,3 @@ def test_heartbeat_log_gate_can_be_quiet_without_affecting_runtime_loop():
     assert engine._should_emit_heartbeat_log(None, 60.0, now_monotonic=0.0) is True
     assert engine._should_emit_heartbeat_log(0.0, 60.0, now_monotonic=30.0) is False
     assert engine._should_emit_heartbeat_log(0.0, 60.0, now_monotonic=60.0) is True
-
-
-def test_engine_runtime_no_longer_constructs_baserow_sync():
-    source = inspect.getsource(engine)
-
-    assert "BaserowSync" not in source
-    assert "sync_event(" not in source
-    assert "sync_tick(" not in source

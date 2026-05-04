@@ -108,8 +108,10 @@ Review the sections in `.env.example` before running services:
 - Telegram control bot configuration.
 - Persistence/runtime storage.
 - Dashboard configuration.
-- Deprecated/legacy Baserow configuration.
 - Local AI sidecar configuration.
+
+Legacy Baserow environment settings are intentionally absent because the
+deprecated Baserow tooling has been removed.
 
 `TRADEBOT_DASHBOARD_HOST=0.0.0.0` exposes the dashboard to the network. Set
 `TRADEBOT_DASHBOARD_TOKEN` if the dashboard is not localhost-only.

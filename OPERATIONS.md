@@ -351,9 +351,9 @@ Use a conservative upgrade process:
 9. Check dashboard, engine, AI sidecar, and Telegram control status.
 10. Monitor logs and runtime state before considering any live-risk operation.
 
-## Deprecated Baserow path
+## Removed Baserow path
 
-Baserow is deprecated for live engine/dashboard freshness. The Baserow variables
-and scripts are legacy/manual-export paths unless explicitly enabled for a
-specific task. Keep `TRADEBOT_BASEROW_SYNC` disabled unless a legacy workflow
-requires it.
+Legacy Baserow tooling has been removed. There are no supported Baserow
+environment variables, scripts, or operator commands in this repository. Use
+the SQLite runtime store and `migrate_to_sqlite.py` for supported local storage
+workflows.
