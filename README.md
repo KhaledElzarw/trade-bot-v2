@@ -151,6 +151,14 @@ source .venv/bin/activate
 python -m pytest -q
 ```
 
+Run coverage locally when you want a line-by-line test coverage report. Coverage
+is informational only; the repository does not enforce a minimum percentage yet.
+
+```bash
+python3 -m coverage run -m pytest -q
+python3 -m coverage report -m
+```
+
 ## Running Smoke Checks
 
 Run the Binance REST smoke check:
