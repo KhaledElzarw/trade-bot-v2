@@ -1,4 +1,5 @@
 import os
+import signal
 import subprocess
 
 import wrapper_runner
@@ -88,3 +89,105 @@ def test_unlink_pid_is_safe_when_file_is_missing(tmp_path):
     wrapper_runner.unlink_pid(pid_path)
 
     assert not pid_path.exists()
+
+
+def test_pid_alive_returns_true_when_kill_zero_succeeds(monkeypatch):
+    calls = []
+
+    def fake_kill(pid, sig):
+        calls.append((pid, sig))
+
+    monkeypatch.setattr(wrapper_runner.os, "kill", fake_kill)
+
+    assert wrapper_runner.pid_alive(12345) is True
+    assert calls == [(12345, 0)]
+
+
+def test_pid_alive_returns_false_when_kill_zero_raises(monkeypatch):
+    def fake_kill(pid, sig):
+        raise OSError("missing")
+
+    monkeypatch.setattr(wrapper_runner.os, "kill", fake_kill)
+
+    assert wrapper_runner.pid_alive(12345) is False
+
+
+def test_stop_pid_sends_sigterm_and_returns_when_process_exits(monkeypatch):
+    calls = []
+
+    def fake_kill(pid, sig):
+        calls.append((pid, sig))
+
+    monkeypatch.setattr(wrapper_runner.os, "kill", fake_kill)
+    monkeypatch.setattr(wrapper_runner, "pid_alive", lambda pid: False)
+    monkeypatch.setattr(wrapper_runner.time, "time", lambda: 0.0)
+    monkeypatch.setattr(
+        wrapper_runner.time,
+        "sleep",
+        lambda seconds: (_ for _ in ()).throw(
+            AssertionError("sleep should not be called")
+        ),
+    )
+
+    wrapper_runner.stop_pid(12345)
+
+    assert calls == [(12345, signal.SIGTERM)]
+
+
+def test_stop_pid_sends_sigkill_after_timeout_when_process_stays_alive(
+    monkeypatch,
+):
+    calls = []
+    sleeps = []
+    times = iter([0.0, 0.0, 0.2])
+
+    def fake_kill(pid, sig):
+        calls.append((pid, sig))
+
+    monkeypatch.setattr(wrapper_runner.os, "kill", fake_kill)
+    monkeypatch.setattr(wrapper_runner, "pid_alive", lambda pid: True)
+    monkeypatch.setattr(wrapper_runner.time, "time", lambda: next(times))
+    monkeypatch.setattr(wrapper_runner.time, "sleep", sleeps.append)
+
+    wrapper_runner.stop_pid(12345, timeout=0.1)
+
+    assert calls == [(12345, signal.SIGTERM), (12345, signal.SIGKILL)]
+    assert sleeps == [0.1]
+
+
+def test_stop_pid_without_kill_after_timeout_sends_only_sigterm(monkeypatch):
+    calls = []
+
+    def fake_kill(pid, sig):
+        calls.append((pid, sig))
+
+    monkeypatch.setattr(wrapper_runner.os, "kill", fake_kill)
+    monkeypatch.setattr(
+        wrapper_runner,
+        "pid_alive",
+        lambda pid: (_ for _ in ()).throw(
+            AssertionError("pid_alive should not be called")
+        ),
+    )
+
+    wrapper_runner.stop_pid(12345, kill_after_timeout=False)
+
+    assert calls == [(12345, signal.SIGTERM)]
+
+
+def test_stop_pid_returns_cleanly_on_process_lookup_error(monkeypatch):
+    def fake_kill(pid, sig):
+        raise ProcessLookupError
+
+    monkeypatch.setattr(wrapper_runner.os, "kill", fake_kill)
+
+    wrapper_runner.stop_pid(12345)
+
+
+def test_stop_pid_returns_cleanly_on_generic_kill_exception(monkeypatch):
+    def fake_kill(pid, sig):
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(wrapper_runner.os, "kill", fake_kill)
+
+    wrapper_runner.stop_pid(12345)

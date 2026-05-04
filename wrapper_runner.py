@@ -1,5 +1,7 @@
 import os
+import signal
 import subprocess
+import time
 from pathlib import Path
 
 
@@ -34,3 +36,35 @@ def write_pid(pid_path: Path, pid: int) -> None:
 def unlink_pid(pid_path: Path) -> None:
     if pid_path.exists():
         pid_path.unlink()
+
+
+def pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+        return True
+    except Exception:
+        return False
+
+
+def stop_pid(
+    pid: int,
+    timeout: float = 5.0,
+    kill_after_timeout: bool = True,
+) -> None:
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    except Exception:
+        return
+    if not kill_after_timeout:
+        return
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if not pid_alive(pid):
+            return
+        time.sleep(0.1)
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except Exception:
+        pass

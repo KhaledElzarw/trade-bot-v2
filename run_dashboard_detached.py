@@ -1,8 +1,5 @@
-import os
-import signal
 import subprocess
 import sys
-import time
 from pathlib import Path
 
 import wrapper_runner
@@ -28,29 +25,11 @@ def _live_dashboard_pids():
 
 
 def _pid_is_alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-        return True
-    except Exception:
-        return False
+    return wrapper_runner.pid_alive(pid)
 
 
 def _stop_pid(pid: int, timeout: float = 5.0) -> None:
-    try:
-        os.kill(pid, signal.SIGTERM)
-    except ProcessLookupError:
-        return
-    except Exception:
-        return
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        if not _pid_is_alive(pid):
-            return
-        time.sleep(0.1)
-    try:
-        os.kill(pid, signal.SIGKILL)
-    except Exception:
-        pass
+    wrapper_runner.stop_pid(pid, timeout=timeout)
 
 
 def _listening_pid_on_port() -> int | None:

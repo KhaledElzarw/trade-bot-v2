@@ -1,5 +1,4 @@
 import os
-import signal
 import subprocess
 from pathlib import Path
 
@@ -26,10 +25,7 @@ def _live_pids():
 
 
 def _stop_pid(pid: int) -> None:
-    try:
-        os.kill(pid, signal.SIGTERM)
-    except Exception:
-        pass
+    wrapper_runner.stop_pid(pid, kill_after_timeout=False)
 
 
 def start() -> int:
