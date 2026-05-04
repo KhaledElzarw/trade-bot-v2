@@ -176,7 +176,10 @@ def test_runtime_snapshot_signature_ignores_saved_at_but_keeps_grid_changes():
         "grid": {"active": True, "orders": [{"side": "SELL", "price": 101.0, "qty_btc": 0.01}]},
     }
 
-    assert engine._runtime_snapshot_change_inputs(runtime)[0] == engine._runtime_snapshot_change_inputs(changed_timestamp)[0]
+    assert (
+        engine._runtime_snapshot_change_inputs(runtime)[0]
+        == engine._runtime_snapshot_change_inputs(changed_timestamp)[0]
+    )
     assert engine._runtime_snapshot_change_inputs(runtime)[0] != engine._runtime_snapshot_change_inputs(changed_grid)[0]
 
 

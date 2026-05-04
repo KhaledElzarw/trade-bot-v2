@@ -115,9 +115,15 @@ def test_mutation_auth_allows_when_token_unset(monkeypatch):
 def test_mutation_auth_checks_header_and_query(monkeypatch):
     monkeypatch.setattr(dashboard_server, "DASHBOARD_TOKEN", "secret")
 
-    assert dashboard_server.Handler._mutation_authorized(DummyHandler({"X-Tradebot-Token": "secret"}), urlparse("/api/config"))
+    assert dashboard_server.Handler._mutation_authorized(
+        DummyHandler({"X-Tradebot-Token": "secret"}),
+        urlparse("/api/config"),
+    )
     assert dashboard_server.Handler._mutation_authorized(DummyHandler({}), urlparse("/api/config?token=secret"))
-    assert not dashboard_server.Handler._mutation_authorized(DummyHandler({"X-Tradebot-Token": "wrong"}), urlparse("/api/config"))
+    assert not dashboard_server.Handler._mutation_authorized(
+        DummyHandler({"X-Tradebot-Token": "wrong"}),
+        urlparse("/api/config"),
+    )
 
 
 def test_market_payload_can_skip_ohlcv_for_status_poll(monkeypatch):

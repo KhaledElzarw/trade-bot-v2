@@ -73,7 +73,11 @@ def _patch_dashboard_reads(monkeypatch):
     monkeypatch.setattr(dashboard_server, "read_events", lambda: [])
     monkeypatch.setattr(dashboard_server, "get_ohlcv", _fake_ohlcv)
     monkeypatch.setattr(dashboard_server, "get_intelligence", lambda *args, **kwargs: {})
-    monkeypatch.setattr(dashboard_server, "ai_endpoint_payload", lambda state: ({"key": "local", "label": "Local"}, {"local": []}))
+    monkeypatch.setattr(
+        dashboard_server,
+        "ai_endpoint_payload",
+        lambda state: ({"key": "local", "label": "Local"}, {"local": []}),
+    )
     monkeypatch.setattr(dashboard_server, "update_history", lambda status: {"items": []})
     monkeypatch.setattr(dashboard_server, "freshness_seconds", lambda ts: 0.1)
 
@@ -194,7 +198,11 @@ def test_post_mutation_routes_return_403_when_token_missing(monkeypatch):
 def test_api_config_applies_patch_and_calls_sidecar_sync(monkeypatch):
     monkeypatch.setattr(dashboard_server, "DASHBOARD_TOKEN", "secret")
     sidecar_calls = []
-    monkeypatch.setattr(dashboard_server, "_sync_ai_sidecar_for_state", lambda state, patch: sidecar_calls.append((state, patch)))
+    monkeypatch.setattr(
+        dashboard_server,
+        "_sync_ai_sidecar_for_state",
+        lambda state, patch: sidecar_calls.append((state, patch)),
+    )
 
     def update_state_locked(updater):
         return updater({"gridMode": "scalpy", "aiEnabled": False})

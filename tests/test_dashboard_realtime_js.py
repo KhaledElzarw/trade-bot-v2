@@ -60,7 +60,10 @@ def test_dashboard_boot_tolerates_cards_without_heads(tmp_path):
       'final-regime-copy','regime-updated','macro-calendar','config-form-grid','market-legend','hover-ohlcv','latest-candle','market-chart','chart-stream-status','boot-error','top-timeframe'
     ];
     const elements = new Map(ids.map(id => [id, makeElement(id)]));
-    const cards = ['summary-card','market-card','intelligence-card','regime-card','macro-card','events-card','orders-card','config-card','status-card'].map(id => elements.get(id));
+    const cards = [
+      'summary-card','market-card','intelligence-card','regime-card','macro-card',
+      'events-card','orders-card','config-card','status-card',
+    ].map(id => elements.get(id));
     cards.forEach(card => {
       card.dataset.defaultSpan = '8';
       card.dataset.defaultCol = '1';
@@ -76,12 +79,29 @@ def test_dashboard_boot_tolerates_cards_without_heads(tmp_path):
     dashboard.querySelectorAll = sel => sel === '.card' ? cards : [];
 
     const sample = {
-      status: { tsUtc: '2026-05-01T00:00:00+00:00', symbol: 'BTCUSDT', price: 100, equityUsdt: 500, btc: 0.1, usdt: 490, stats: { grid: {}, ai: {} }, position: {} },
+      status: {
+        tsUtc: '2026-05-01T00:00:00+00:00',
+        symbol: 'BTCUSDT',
+        price: 100,
+        equityUsdt: 500,
+        btc: 0.1,
+        usdt: 490,
+        stats: { grid: {}, ai: {} },
+        position: {},
+      },
       state: { paused: false, aiEnabled: false, symbol: 'BTCUSDT', interval: '1m', gridMode: 'scalpy' },
       runtime: { savedAt: '2026-05-01T00:00:00+00:00', grid: { orders: [] } },
       cumulative: { realizedPnlUsdt: 0, feesPaidUsdt: 0 },
       events: [], ohlcv: [], freshnessSeconds: 0.1, serverTimeUtc: '2026-05-01T00:00:00+00:00',
-      seq: 1, serverInstanceId: 'server-1', channel: 'dashboard', aiModels: [], aiEndpoints: [], aiEndpointModels: {}, intelligence: {}, refreshMs: 1000, dashboardRefreshMs: 60000,
+      seq: 1,
+      serverInstanceId: 'server-1',
+      channel: 'dashboard',
+      aiModels: [],
+      aiEndpoints: [],
+      aiEndpointModels: {},
+      intelligence: {},
+      refreshMs: 1000,
+      dashboardRefreshMs: 60000,
     };
 
     const sandbox = {
@@ -112,7 +132,14 @@ def test_dashboard_boot_tolerates_cards_without_heads(tmp_path):
         addEventListener(){},
       },
       window: {
-        location: { href: 'http://localhost/?interval=1m', origin: 'http://localhost', protocol: 'http:', host: 'localhost', pathname: '/', search: '?interval=1m' },
+        location: {
+          href: 'http://localhost/?interval=1m',
+          origin: 'http://localhost',
+          protocol: 'http:',
+          host: 'localhost',
+          pathname: '/',
+          search: '?interval=1m',
+        },
         addEventListener(){},
       },
       requestAnimationFrame(fn){ fn(); return 1; },
@@ -264,8 +291,14 @@ def test_realtime_chart_bar_merge_semantics(tmp_path):
     t.stateUi.timeframe = '1s';
     t.stateUi.candleLimit = 3;
     t.stateUi.lastOhlcv = [
-      { openTimeMs: 0, closeTimeMs: 999, open: 9, high: 10, low: 8, close: 9.5, interval: '1s', symbol: 'BTCUSDT' },
-      { openTimeMs: 1000, closeTimeMs: 1999, open: 10, high: 11, low: 9, close: 10.5, interval: '1s', symbol: 'BTCUSDT' },
+      {
+        openTimeMs: 0, closeTimeMs: 999, open: 9, high: 10, low: 8,
+        close: 9.5, interval: '1s', symbol: 'BTCUSDT',
+      },
+      {
+        openTimeMs: 1000, closeTimeMs: 1999, open: 10, high: 11, low: 9,
+        close: 10.5, interval: '1s', symbol: 'BTCUSDT',
+      },
     ];
 
     assert.strictEqual(t.upsertRealtimeBar(bar), true);
@@ -273,11 +306,27 @@ def test_realtime_chart_bar_merge_semantics(tmp_path):
     assert.strictEqual(t.stateUi.lastOhlcv[1].close, 11);
     assert.strictEqual(t.stateUi.lastOhlcv[1].high, 12);
 
-    assert.strictEqual(t.upsertRealtimeBar({ ...bar, openTimeMs: 2000, closeTimeMs: 2999, open: 11, high: 13, low: 10, close: 12 }), true);
+    assert.strictEqual(t.upsertRealtimeBar({
+      ...bar,
+      openTimeMs: 2000,
+      closeTimeMs: 2999,
+      open: 11,
+      high: 13,
+      low: 10,
+      close: 12,
+    }), true);
     assert.strictEqual(t.stateUi.lastOhlcv.length, 3);
     assert.strictEqual(t.stateUi.lastOhlcv[2].openTimeMs, 2000);
 
-    assert.strictEqual(t.upsertRealtimeBar({ ...bar, openTimeMs: 3000, closeTimeMs: 3999, open: 12, high: 14, low: 11, close: 13 }), true);
+    assert.strictEqual(t.upsertRealtimeBar({
+      ...bar,
+      openTimeMs: 3000,
+      closeTimeMs: 3999,
+      open: 12,
+      high: 14,
+      low: 11,
+      close: 13,
+    }), true);
     assert.deepStrictEqual(plain(t.stateUi.lastOhlcv.map(row => row.openTimeMs)), [0, 1000, 2000, 3000]);
 
     assert.strictEqual(t.upsertRealtimeBar({ ...bar, openTimeMs: 500, closeTimeMs: 999 }), false);
@@ -293,7 +342,15 @@ def test_realtime_chart_bar_merge_semantics(tmp_path):
       interval: '1s',
       symbol: 'BTCUSDT',
     }));
-    assert.strictEqual(t.upsertRealtimeBar({ ...bar, openTimeMs: 30000, closeTimeMs: 30999, open: 12, high: 14, low: 11, close: 13 }), true);
+    assert.strictEqual(t.upsertRealtimeBar({
+      ...bar,
+      openTimeMs: 30000,
+      closeTimeMs: 30999,
+      open: 12,
+      high: 14,
+      low: 11,
+      close: 13,
+    }), true);
     assert.strictEqual(t.stateUi.lastOhlcv.length, 30);
     assert.strictEqual(t.stateUi.lastOhlcv[0].openTimeMs, 1000);
     assert.strictEqual(t.stateUi.lastOhlcv[29].openTimeMs, 30000);
@@ -336,7 +393,10 @@ def test_realtime_chart_bar_merge_semantics(tmp_path):
         stats: { grid: {} },
       },
       state: { aiEnabled: true, aiEndpointKey: 'local' },
-      runtime: { savedAt: '2026-05-01T00:00:01+00:00', grid: { orders: [{ side: 'BUY', price: 77000, qty_btc: 0.001 }] } },
+      runtime: {
+        savedAt: '2026-05-01T00:00:01+00:00',
+        grid: { orders: [{ side: 'BUY', price: 77000, qty_btc: 0.001 }] },
+      },
       cumulative: { realizedPnlUsdt: 2, feesPaidUsdt: 0.5 },
       events: [{ tsUtc: '2026-05-01T00:00:01+00:00', event: 'ENTER', price: 78000, qtyBtc: 0.001 }],
       ohlcv: [],
@@ -353,8 +413,30 @@ def test_realtime_chart_bar_merge_semantics(tmp_path):
       state: { aiEnabled: true },
       runtime: { grid: {} },
       cumulative: {},
-      eventsPatch: { mode: 'snapshot', cursor: 1, items: [{ _eventId: 1, tsUtc: '2026-05-01T00:00:01+00:00', event: 'ENTER', price: 78000, qtyBtc: 0.001 }] },
-      ordersPatch: { mode: 'snapshot', signature: 'a', items: [{ _orderKey: 'buy-1', side: 'BUY', price: 77000, qty_btc: 0.001, total: 77, type: 'LIMIT' }], ops: [] },
+      eventsPatch: {
+        mode: 'snapshot',
+        cursor: 1,
+        items: [{
+          _eventId: 1,
+          tsUtc: '2026-05-01T00:00:01+00:00',
+          event: 'ENTER',
+          price: 78000,
+          qtyBtc: 0.001,
+        }],
+      },
+      ordersPatch: {
+        mode: 'snapshot',
+        signature: 'a',
+        items: [{
+          _orderKey: 'buy-1',
+          side: 'BUY',
+          price: 77000,
+          qty_btc: 0.001,
+          total: 77,
+          type: 'LIMIT',
+        }],
+        ops: [],
+      },
       refreshMs: 1000,
     }, false);
     t.applyLiveMarketPayload({
@@ -362,10 +444,31 @@ def test_realtime_chart_bar_merge_semantics(tmp_path):
       state: { aiEnabled: true },
       runtime: { grid: {} },
       cumulative: {},
-      eventsPatch: { mode: 'delta', cursor: 2, items: [{ _eventId: 2, tsUtc: '2026-05-01T00:00:02+00:00', event: 'EXIT', price: 78200, qtyBtc: 0.001 }] },
+      eventsPatch: {
+        mode: 'delta',
+        cursor: 2,
+        items: [{
+          _eventId: 2,
+          tsUtc: '2026-05-01T00:00:02+00:00',
+          event: 'EXIT',
+          price: 78200,
+          qtyBtc: 0.001,
+        }],
+      },
       ordersPatch: { mode: 'delta', signature: 'b', items: [], ops: [
         { op: 'remove', key: 'buy-1' },
-        { op: 'upsert', key: 'sell-1', item: { _orderKey: 'sell-1', side: 'SELL', price: 79000, qty_btc: 0.001, total: 79, type: 'LIMIT' } },
+        {
+          op: 'upsert',
+          key: 'sell-1',
+          item: {
+            _orderKey: 'sell-1',
+            side: 'SELL',
+            price: 79000,
+            qty_btc: 0.001,
+            total: 79,
+            type: 'LIMIT',
+          },
+        },
       ] },
       refreshMs: 1000,
     }, false);
@@ -374,8 +477,20 @@ def test_realtime_chart_bar_merge_semantics(tmp_path):
     assert.strictEqual(t.stateUi.lastOrders.length, 1);
     assert.strictEqual(t.stateUi.lastOrders[0].side, 'SELL');
 
-    assert.strictEqual(t.applyLiveMarketPayload({ channel: 'status', seq: 10, status: { price: 1 }, runtime: {}, cumulative: {} }, false).status.price, 1);
-    assert.strictEqual(t.applyLiveMarketPayload({ channel: 'status', seq: 9, status: { price: 2 }, runtime: {}, cumulative: {} }, false), null);
+    assert.strictEqual(t.applyLiveMarketPayload({
+      channel: 'status',
+      seq: 10,
+      status: { price: 1 },
+      runtime: {},
+      cumulative: {},
+    }, false).status.price, 1);
+    assert.strictEqual(t.applyLiveMarketPayload({
+      channel: 'status',
+      seq: 9,
+      status: { price: 2 },
+      runtime: {},
+      cumulative: {},
+    }, false), null);
 
     const sockets = [];
     const scheduled = [];
@@ -391,7 +506,20 @@ def test_realtime_chart_bar_merge_semantics(tmp_path):
     sandbox.clearTimeout = () => {};
     sandbox.setInterval = (fn, delay) => { intervals.push({ fn, delay }); return intervals.length; };
     sandbox.clearInterval = () => {};
-    sandbox.fetch = async () => ({ ok: true, json: async () => ({ channel: 'status', seq: 11, status: { price: 1, stats: {} }, state: {}, runtime: {}, cumulative: {}, events: [], ohlcv: [], refreshMs: 1000 }) });
+    sandbox.fetch = async () => ({
+      ok: true,
+      json: async () => ({
+        channel: 'status',
+        seq: 11,
+        status: { price: 1, stats: {} },
+        state: {},
+        runtime: {},
+        cumulative: {},
+        events: [],
+        ohlcv: [],
+        refreshMs: 1000,
+      }),
+    });
 
     t.stateUi.timeframe = '1s';
     t.stateUi.lastOhlcv = [];
@@ -403,7 +531,18 @@ def test_realtime_chart_bar_merge_semantics(tmp_path):
     sockets[0].listeners.message({ data: JSON.stringify({
       channel: 'chart',
       seq: 1,
-      bar: { openTimeMs: 31000, closeTimeMs: 31999, open: 13, high: 15, low: 12, close: 14, volumeBase: 0, volumeUsdt: 0, symbol: 'BTCUSDT', interval: '1s' },
+      bar: {
+        openTimeMs: 31000,
+        closeTimeMs: 31999,
+        open: 13,
+        high: 15,
+        low: 12,
+        close: 14,
+        volumeBase: 0,
+        volumeUsdt: 0,
+        symbol: 'BTCUSDT',
+        interval: '1s',
+      },
       status: { price: 14, stats: {} },
       refreshMs: 1000,
     }) });

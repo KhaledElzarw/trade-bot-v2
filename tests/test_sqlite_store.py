@@ -20,7 +20,11 @@ def test_snapshot_round_trip_and_atomic_patch(tmp_path):
     db = tmp_path / "tradebot.sqlite3"
 
     sqlite_store.write_snapshot("state", {"paused": False, "count": 1}, path=db)
-    patched = sqlite_store.update_snapshot("state", lambda current: {**current, "paused": True, "count": current["count"] + 1}, path=db)
+    patched = sqlite_store.update_snapshot(
+        "state",
+        lambda current: {**current, "paused": True, "count": current["count"] + 1},
+        path=db,
+    )
 
     assert patched == {"paused": True, "count": 2}
     assert sqlite_store.read_snapshot("state", path=db) == patched

@@ -51,7 +51,11 @@ def _start_server():
 def test_market_payload_matches_explicit_contract(monkeypatch):
     monkeypatch.setattr(dashboard_server, "read_json", _fake_read_json)
     monkeypatch.setattr(dashboard_server, "get_ohlcv", _fake_ohlcv)
-    monkeypatch.setattr(dashboard_server, "read_events", lambda: [{"tsUtc": "2026-05-02T00:00:00+00:00", "event": "ENTER", "price": 100.0}])
+    monkeypatch.setattr(
+        dashboard_server,
+        "read_events",
+        lambda: [{"tsUtc": "2026-05-02T00:00:00+00:00", "event": "ENTER", "price": 100.0}],
+    )
     monkeypatch.setattr(dashboard_server, "freshness_seconds", lambda ts: 0.1)
 
     payload = dashboard_server.build_market_payload({"interval": ["1s"], "ohlcv": ["0"]})
