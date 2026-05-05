@@ -1,5 +1,7 @@
 import json
+import sys
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 import pytest
 
@@ -66,6 +68,128 @@ def test_safe_read_json_returns_empty_on_failure(monkeypatch):
     monkeypatch.setattr(engine, "_read_json", lambda path: (_ for _ in ()).throw(ValueError("bad json")))
 
     assert engine._safe_read_json("missing.json") == {}
+
+
+def test_pid_alive_handles_invalid_alive_and_dead_paths(monkeypatch):
+    kill_calls = []
+
+    def fake_kill(pid, signal):
+        kill_calls.append((pid, signal))
+        if pid == 456:
+            raise ProcessLookupError("missing")
+
+    monkeypatch.setattr(engine.os, "kill", fake_kill)
+
+    assert engine._pid_alive(None) is False
+    assert engine._pid_alive(0) is False
+    assert engine._pid_alive(-1) is False
+    assert engine._pid_alive(123) is True
+    assert engine._pid_alive(456) is False
+    assert kill_calls == [(123, 0), (456, 0)]
+
+
+def test_acquire_engine_lock_writes_fresh_runtime_state(monkeypatch):
+    fixed_now = datetime(2026, 5, 5, 12, 30, tzinfo=timezone.utc)
+    writes = []
+
+    def fail_pid_alive(pid):
+        raise AssertionError(f"unexpected pid check for {pid}")
+
+    monkeypatch.setattr(engine.os, "getpid", lambda: 222)
+    monkeypatch.setattr(engine, "_safe_read_json", lambda path: {})
+    monkeypatch.setattr(engine, "_pid_alive", fail_pid_alive)
+    monkeypatch.setattr(engine, "_utc_now", lambda: fixed_now)
+    monkeypatch.setattr(engine, "_write_runtime_state", lambda payload: writes.append(dict(payload)))
+
+    assert engine._acquire_engine_lock() == (222, True)
+    assert writes == [
+        {
+            "enginePid": 222,
+            "engineStartedAt": "2026-05-05T12:30:00+00:00",
+            "savedAt": "2026-05-05T12:30:00+00:00",
+        }
+    ]
+
+
+def test_acquire_engine_lock_preserves_existing_start_for_same_pid(monkeypatch):
+    fixed_now = datetime(2026, 5, 5, 12, 30, tzinfo=timezone.utc)
+    writes = []
+
+    monkeypatch.setattr(engine.os, "getpid", lambda: 222)
+    monkeypatch.setattr(
+        engine,
+        "_safe_read_json",
+        lambda path: {"enginePid": 222, "engineStartedAt": "already-started"},
+    )
+    monkeypatch.setattr(engine, "_utc_now", lambda: fixed_now)
+    monkeypatch.setattr(engine, "_write_runtime_state", lambda payload: writes.append(dict(payload)))
+
+    assert engine._acquire_engine_lock() == (222, False)
+    assert writes == [
+        {
+            "enginePid": 222,
+            "engineStartedAt": "already-started",
+            "savedAt": "2026-05-05T12:30:00+00:00",
+        }
+    ]
+
+
+def test_acquire_engine_lock_takes_over_stale_owner(monkeypatch):
+    fixed_now = datetime(2026, 5, 5, 12, 30, tzinfo=timezone.utc)
+    writes = []
+
+    monkeypatch.setattr(engine.os, "getpid", lambda: 222)
+    monkeypatch.setattr(engine, "_safe_read_json", lambda path: {"enginePid": 111})
+    monkeypatch.setattr(engine, "_pid_alive", lambda pid: False)
+    monkeypatch.setattr(engine, "_utc_now", lambda: fixed_now)
+    monkeypatch.setattr(engine, "_write_runtime_state", lambda payload: writes.append(dict(payload)))
+
+    assert engine._acquire_engine_lock() == (222, True)
+    assert writes == [
+        {
+            "enginePid": 222,
+            "engineStartedAt": "2026-05-05T12:30:00+00:00",
+            "savedAt": "2026-05-05T12:30:00+00:00",
+        }
+    ]
+
+
+def test_acquire_engine_lock_raises_for_different_live_owner(monkeypatch):
+    writes = []
+
+    monkeypatch.setattr(engine.os, "getpid", lambda: 222)
+    monkeypatch.setattr(engine, "_safe_read_json", lambda path: {"enginePid": 111})
+    monkeypatch.setattr(engine, "_pid_alive", lambda pid: True)
+    monkeypatch.setattr(engine, "_write_runtime_state", lambda payload: writes.append(dict(payload)))
+
+    with pytest.raises(RuntimeError, match="Engine already running with pid 111"):
+        engine._acquire_engine_lock()
+
+    assert writes == []
+
+
+def test_tg_send_posts_message_without_real_http(monkeypatch):
+    calls = []
+
+    class Response:
+        def raise_for_status(self):
+            calls.append(("raise_for_status",))
+
+    def fake_post(url, **kwargs):
+        calls.append((url, kwargs))
+        return Response()
+
+    monkeypatch.setitem(sys.modules, "requests", SimpleNamespace(post=fake_post))
+
+    engine._tg_send("token-123", 456, "hello")
+
+    assert calls == [
+        (
+            "https://api.telegram.org/bottoken-123/sendMessage",
+            {"json": {"chat_id": 456, "text": "hello"}, "timeout": 10},
+        ),
+        ("raise_for_status",),
+    ]
 
 
 def test_log_writes_timestamped_line_to_patched_path(tmp_path, monkeypatch, capsys):
