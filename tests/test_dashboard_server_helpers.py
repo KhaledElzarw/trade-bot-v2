@@ -431,7 +431,7 @@ def test_fetch_news_items_parses_fake_rss_and_dedupes(monkeypatch):
   <item>
     <title>Bitcoin rally gains steam</title>
     <link>https://example.test/duplicate</link>
-    <description>duplicate</description>
+    <description>ETF inflow and BTC liquidity duplicate</description>
     <pubDate>Mon, 04 May 2026 12:01:00 GMT</pubDate>
   </item>
   <item>
@@ -439,6 +439,12 @@ def test_fetch_news_items_parses_fake_rss_and_dedupes(monkeypatch):
     <link>https://example.test/macro</link>
     <description>Inflation and dollar liquidity</description>
     <pubDate>not-a-date</pubDate>
+  </item>
+  <item>
+    <title>BTC liquidity build</title>
+    <link>https://example.test/btc-liquidity</link>
+    <description>Liquidity improves while BTC holds bid</description>
+    <pubDate>Mon, 04 May 2026 12:02:00</pubDate>
   </item>
   <item>
     <title></title>
@@ -469,11 +475,15 @@ def test_fetch_news_items_parses_fake_rss_and_dedupes(monkeypatch):
     items_by_title = {item["title"]: item for item in items}
 
     assert set(items_by_title) == {
+        "BTC liquidity build",
         "Macro rates watch",
         "Bitcoin rally gains steam",
     }
     assert [item["title"] for item in items].count("Bitcoin rally gains steam") == 1
     assert items_by_title["Macro rates watch"]["publishedUtc"] == "not-a-date"
+    assert items_by_title["BTC liquidity build"]["publishedUtc"] == (
+        "2026-05-04T12:02:00+00:00"
+    )
     assert items_by_title["Bitcoin rally gains steam"]["source"] == "Fake RSS"
     assert all("sortTs" not in item and "score" not in item for item in items)
 
