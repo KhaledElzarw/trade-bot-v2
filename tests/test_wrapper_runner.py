@@ -155,6 +155,27 @@ def test_stop_pid_sends_sigkill_after_timeout_when_process_stays_alive(
     assert sleeps == [0.1]
 
 
+def test_stop_pid_swallows_sigkill_exception_after_timeout(monkeypatch):
+    calls = []
+    sleeps = []
+    times = iter([0.0, 0.0, 0.2])
+
+    def fake_kill(pid, sig):
+        calls.append((pid, sig))
+        if sig == signal.SIGKILL:
+            raise OSError("denied")
+
+    monkeypatch.setattr(wrapper_runner.os, "kill", fake_kill)
+    monkeypatch.setattr(wrapper_runner, "pid_alive", lambda pid: True)
+    monkeypatch.setattr(wrapper_runner.time, "time", lambda: next(times))
+    monkeypatch.setattr(wrapper_runner.time, "sleep", sleeps.append)
+
+    wrapper_runner.stop_pid(12345, timeout=0.1)
+
+    assert calls == [(12345, signal.SIGTERM), (12345, signal.SIGKILL)]
+    assert sleeps == [0.1]
+
+
 def test_stop_pid_without_kill_after_timeout_sends_only_sigterm(monkeypatch):
     calls = []
 
