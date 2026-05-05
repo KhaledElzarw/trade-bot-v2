@@ -7,10 +7,9 @@ import dashboard_orchestrator
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 # gridMode=flexy is intentionally omitted; it remains active behavior for a later branch.
-DEPRECATED_MODULES = {
-    "advisor",
-}
+DEPRECATED_MODULES = set()
 REMOVED_LEGACY_MODULES = {
+    "advisor",
     "control_bot",
     "engine_trend",
     "grid_engine_honest",
