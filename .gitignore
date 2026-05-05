@@ -14,6 +14,7 @@ ai_agents/
 *.sqlite3-shm
 .pytest_cache/
 .coverage
+coverage.json
 htmlcov/
 *.log
 *.pid
