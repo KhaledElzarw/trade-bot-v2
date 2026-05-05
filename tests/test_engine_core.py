@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timezone
 
 import pytest
 
@@ -104,6 +105,158 @@ def test_fill_order_paper_sell_allocates_cost_basis():
     assert round(event["realizedPnlUsdt"], 4) == 4.975
     assert round(paper.btc, 6) == 0.75
     assert round(grid.cost_basis_usdt, 4) == 60.0
+
+
+def test_env_required_numeric_and_date_helpers_cover_edge_paths(monkeypatch):
+    monkeypatch.setenv("ENGINE_EDGE_FLOAT", "not-a-float")
+    assert engine._env_float("ENGINE_EDGE_FLOAT", 1.25) == 1.25
+
+    monkeypatch.delenv("ENGINE_REQUIRED_EDGE", raising=False)
+    with pytest.raises(RuntimeError, match="Missing required env var: ENGINE_REQUIRED_EDGE"):
+        engine._required("ENGINE_REQUIRED_EDGE")
+
+    monkeypatch.setenv("ENGINE_REQUIRED_EDGE", "present")
+    assert engine._required("ENGINE_REQUIRED_EDGE") == "present"
+
+    assert engine._float_or_none(None) is None
+    assert engine._float_or_none("12.5") == 12.5
+    assert engine._float_or_none(object()) is None
+
+    assert engine._relative_bps_moved(0.0, 0.0, 5) is False
+    assert engine._relative_bps_moved(0.0, 1e-13, 5) is False
+    assert engine._relative_bps_moved(0.0, 1e-11, 5) is True
+
+    assert engine.PaperAccount(usdt=100.0, btc=0.25).equity(200.0) == 150.0
+    assert engine._day_key(datetime(2026, 5, 5, 12, 30, tzinfo=timezone.utc)) == "2026-05-05"
+
+
+def test_ema_and_atr_cover_success_and_insufficient_data():
+    assert engine._ema([10.0, 12.0, 14.0], period=3) == pytest.approx(12.5)
+
+    with pytest.raises(ValueError, match="Not enough values for EMA"):
+        engine._ema([10.0], period=3)
+
+    assert engine._atr(
+        high=[11.0, 13.0, 15.0],
+        low=[9.0, 10.0, 12.0],
+        close=[10.0, 12.0, 14.0],
+        period=2,
+    ) == pytest.approx(3.0)
+
+    with pytest.raises(ValueError, match="Not enough data for ATR"):
+        engine._atr(high=[11.0, 13.0], low=[9.0, 10.0], close=[10.0, 12.0], period=2)
+
+
+def test_resolve_grid_mode_uses_state_default_base_and_ai_override():
+    assert engine._resolve_grid_mode({}, {}, ai_live=False) == "scalpy"
+    assert engine._resolve_grid_mode({"gridMode": "fatty"}, {"recommendedMode": "scalpy"}, ai_live=False) == "fatty"
+    assert engine._resolve_grid_mode({"gridMode": "fatty"}, {"recommendedMode": "scalpy"}, ai_live=True) == "scalpy"
+
+
+def test_resolve_grid_mode_rejects_invalid_state_mode():
+    with pytest.raises(ValueError, match="unsupported gridMode 'flexy'"):
+        engine._resolve_grid_mode({"gridMode": "flexy"}, {}, ai_live=False)
+
+
+def test_attach_ai_event_fields_preserves_empty_and_adds_known_fields():
+    event = {"event": "ENTER"}
+
+    assert engine._attach_ai_event_fields(event, {}) is event
+    assert event == {"event": "ENTER"}
+
+    enriched = engine._attach_ai_event_fields(
+        {"event": "EXIT"},
+        {
+            "decisionId": "decision-1",
+            "riskAction": "sells_only",
+            "promptVersion": "prompt-v2",
+            "confidence": 0.0,
+            "model": "test-model",
+        },
+    )
+
+    assert enriched == {
+        "event": "EXIT",
+        "aiDecisionId": "decision-1",
+        "aiRiskAction": "sells_only",
+        "aiPromptVersion": "prompt-v2",
+        "aiConfidence": 0.0,
+        "aiModel": "test-model",
+    }
+
+
+def test_fill_order_paper_returns_none_for_unfillable_edges():
+    grid = engine.GridState(
+        anchor=100.0,
+        spacing_pct=0.01,
+        levels=1,
+        max_exposure_pct=1.0,
+        reserved_usdt=0.0,
+        reserved_btc=0.0,
+        cost_basis_usdt=0.0,
+        orders=[],
+        active=True,
+    )
+
+    buy_paper = engine.PaperAccount(usdt=100.0, btc=0.0)
+    assert (
+        engine._fill_order_paper(
+            buy_paper,
+            grid,
+            engine.GridOrder(side="BUY", price=100.0, qty_btc=0.0),
+            fill_price=100.0,
+            fee_bps=10,
+        )
+        is None
+    )
+    assert buy_paper.usdt == 100.0
+    assert buy_paper.btc == 0.0
+
+    sell_paper = engine.PaperAccount(usdt=0.0, btc=0.0)
+    assert (
+        engine._fill_order_paper(
+            sell_paper,
+            grid,
+            engine.GridOrder(side="SELL", price=100.0, qty_btc=0.1),
+            fill_price=100.0,
+            fee_bps=10,
+        )
+        is None
+    )
+    assert sell_paper.usdt == 0.0
+    assert sell_paper.btc == 0.0
+
+
+def test_fill_order_paper_partial_buy_shrinks_to_cover_fee():
+    paper = engine.PaperAccount(usdt=100.0, btc=0.0)
+    grid = engine.GridState(
+        anchor=100.0,
+        spacing_pct=0.01,
+        levels=1,
+        max_exposure_pct=1.0,
+        reserved_usdt=0.0,
+        reserved_btc=0.0,
+        cost_basis_usdt=0.0,
+        orders=[],
+        active=True,
+    )
+
+    event = engine._fill_order_paper(
+        paper,
+        grid,
+        engine.GridOrder(side="BUY", price=100.0, qty_btc=2.0),
+        fill_price=100.0,
+        fee_bps=100,
+    )
+
+    assert event is not None
+    assert event["event"] == "ENTER"
+    assert event["qtyBtc"] == pytest.approx(100.0 / 101.0)
+    assert event["notionalUsdt"] == pytest.approx(10000.0 / 101.0)
+    assert event["feeUsdt"] == pytest.approx(100.0 / 101.0)
+    assert paper.usdt == pytest.approx(0.0)
+    assert paper.btc == pytest.approx(100.0 / 101.0)
+    assert grid.cost_basis_usdt == pytest.approx(100.0)
 
 
 def test_normalize_cumulative_derives_realized_and_coerces_counts():
@@ -243,6 +396,72 @@ def test_reconcile_accounting_from_trade_log(tmp_path, monkeypatch):
     assert result["cumulative"]["trades"] == 1
     assert result["cumulative"]["wins"] == 1
     assert round(result["cumulative"]["feesPaidUsdt"], 4) == 1.7
+
+
+def test_reconcile_accounting_flags_anomalies_and_loss_edges(monkeypatch):
+    monkeypatch.setattr(
+        engine,
+        "_load_trade_events",
+        lambda: [
+            {"event": "ENGINE_START", "tsUtc": "2026-01-01T00:00:00+00:00"},
+            {"event": "ENGINE_START", "tsUtc": "2026-01-01T00:00:01+00:00"},
+            {"event": "EXIT", "tsUtc": "2026-01-01T00:00:02+00:00", "qtyBtc": 0.0},
+            {"event": "ENTER", "qtyBtc": 1.0, "notionalUsdt": 100.0, "feeUsdt": 1.0},
+            {
+                "event": "EXIT",
+                "tsUtc": "2026-01-01T00:00:03+00:00",
+                "qtyBtc": 2.0,
+                "notionalUsdt": 90.0,
+                "feeUsdt": 0.9,
+            },
+            {
+                "event": "EXIT",
+                "qtyBtc": 0.5,
+                "notionalUsdt": 40.0,
+                "feeUsdt": 0.4,
+                "grossRealizedPnlUsdt": -10.5,
+                "realizedPnlUsdt": -10.9,
+            },
+        ],
+    )
+
+    result = engine._reconcile_accounting_from_trade_log(start_usdt=200.0, start_btc=0.0)
+
+    assert result["paper"]["usdt"] == pytest.approx(138.6)
+    assert result["paper"]["btc"] == pytest.approx(0.5)
+    assert result["openCostBasisUsdt"] == pytest.approx(50.5)
+    assert result["cumulative"]["trades"] == 1
+    assert result["cumulative"]["losses"] == 1
+    assert result["cumulative"]["wins"] == 0
+    assert result["cumulative"]["feesPaidUsdt"] == pytest.approx(1.4)
+    assert result["anomalies"] == [
+        "duplicate_engine_start:2026-01-01T00:00:01+00:00",
+        "oversell:2026-01-01T00:00:03+00:00 qty=2.0 btc_before=1.0",
+    ]
+
+
+def test_reconcile_accounting_normalizes_tiny_negative_residuals(monkeypatch):
+    monkeypatch.setattr(
+        engine,
+        "_load_trade_events",
+        lambda: [
+            {"event": "ENTER", "qtyBtc": 0.3, "notionalUsdt": 0.3, "feeUsdt": 0.0},
+            {"event": "EXIT", "qtyBtc": 0.1, "notionalUsdt": 0.11, "feeUsdt": 0.0},
+            {"event": "EXIT", "qtyBtc": 0.1, "notionalUsdt": 0.11, "feeUsdt": 0.0},
+            {
+                "event": "EXIT",
+                "qtyBtc": 0.1000000000005,
+                "notionalUsdt": 0.11,
+                "feeUsdt": 0.0,
+            },
+        ],
+    )
+
+    result = engine._reconcile_accounting_from_trade_log(start_usdt=0.0, start_btc=0.0)
+
+    assert result["paper"]["btc"] == 0.0
+    assert result["openCostBasisUsdt"] == 0.0
+    assert result["anomalies"] == []
 
 
 def test_snapshot_gate_throttles_identical_payloads_until_refresh_interval():
