@@ -1,7 +1,70 @@
 import json
+import sys
 
 import migrate_to_sqlite
 import sqlite_store
+
+
+def test_read_helpers_ignore_missing_and_malformed_inputs(tmp_path):
+    bad_json = tmp_path / "bad.json"
+    bad_json.write_text("{", encoding="utf-8")
+    non_dict_json = tmp_path / "array.json"
+    non_dict_json.write_text(json.dumps([]), encoding="utf-8")
+
+    assert migrate_to_sqlite._read_json(tmp_path / "missing.json") == {}
+    assert migrate_to_sqlite._read_json(bad_json) == {}
+    assert migrate_to_sqlite._read_json(non_dict_json) == {}
+
+    rows = tmp_path / "trades.jsonl"
+    rows.write_text(
+        "\n".join(
+            [
+                "",
+                "not-json",
+                json.dumps([]),
+                json.dumps({"event": "ENTER"}),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert migrate_to_sqlite._read_jsonl(tmp_path / "missing.jsonl") == []
+    assert migrate_to_sqlite._read_jsonl(rows) == [{"event": "ENTER"}]
+
+
+def test_main_reports_empty_temp_migration(tmp_path, monkeypatch, capsys):
+    base = tmp_path / "runtime"
+    base.mkdir()
+    db = tmp_path / "tradebot.sqlite3"
+    history = base / "dashboard_history.json"
+    history.write_text(json.dumps({"items": {"bad": "shape"}}), encoding="utf-8")
+
+    monkeypatch.setattr(
+        migrate_to_sqlite,
+        "SNAPSHOT_FILES",
+        {
+            "state": base / "state.json",
+            "runtime_state": base / "runtime_state.json",
+            "engine_status": base / "engine_status.json",
+            "cumulative": base / "cumulative.json",
+            "ai_signal": base / "ai_signal.json",
+        },
+    )
+    monkeypatch.setattr(migrate_to_sqlite, "TRADES_PATH", base / "trades.jsonl")
+    monkeypatch.setattr(migrate_to_sqlite, "HISTORY_PATH", history)
+    monkeypatch.setattr(sys, "argv", ["migrate_to_sqlite.py", "--db", str(db)])
+
+    migrate_to_sqlite.main()
+
+    assert json.loads(capsys.readouterr().out) == {
+        "db": str(db),
+        "events": 0,
+        "history": 0,
+        "ok": True,
+        "snapshots": 0,
+    }
+    assert sqlite_store.read_history(path=db) == {"items": []}
+    assert not sqlite_store.has_snapshot("state", path=db)
 
 
 def test_migrate_imports_runtime_files_idempotently(tmp_path, monkeypatch):
