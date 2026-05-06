@@ -788,6 +788,14 @@ def _daily_stop_decision(
     return daily_loss_pct >= max_daily_loss_pct, daily_loss_pct
 
 
+def _inactive_reason(state: dict, stats: Stats, now: datetime) -> str | None:
+    if state.get("paused"):
+        return "paused"
+    if stats.cooldown_until and now < stats.cooldown_until:
+        return "cooldown_after_loss"
+    return None
+
+
 def _grid_mode_error(mode: object) -> ValueError:
     allowed = ", ".join(sorted(SUPPORTED_GRID_MODES))
     return ValueError(f"unsupported gridMode {mode!r}; gridMode must be one of: {allowed}")
@@ -1330,9 +1338,7 @@ def main():
             time.sleep(1)
             continue
 
-        inactive_reason = "paused" if state.get("paused") else None
-        if inactive_reason is None and stats.cooldown_until and now < stats.cooldown_until:
-            inactive_reason = "cooldown_after_loss"
+        inactive_reason = _inactive_reason(state, stats, now)
 
         # Keep dashboard status fresh while inactive; runtime snapshots are gated below.
         if inactive_reason:

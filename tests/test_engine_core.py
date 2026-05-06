@@ -501,6 +501,45 @@ def test_daily_stop_decision_equity_above_peak_clamps_loss_to_zero():
     assert stats.__dict__ == before
 
 
+def test_inactive_reason_returns_paused():
+    now = datetime(2026, 5, 6, 12, 0, tzinfo=timezone.utc)
+    stats = engine.Stats(day="2026-05-06")
+
+    assert engine._inactive_reason({"paused": True}, stats, now) == "paused"
+
+
+def test_inactive_reason_paused_wins_over_cooldown():
+    now = datetime(2026, 5, 6, 12, 0, tzinfo=timezone.utc)
+    stats = engine.Stats(
+        day="2026-05-06",
+        cooldown_until=datetime(2026, 5, 6, 12, 30, tzinfo=timezone.utc),
+    )
+
+    assert engine._inactive_reason({"paused": True}, stats, now) == "paused"
+
+
+def test_inactive_reason_returns_cooldown_for_future_cooldown():
+    now = datetime(2026, 5, 6, 12, 0, tzinfo=timezone.utc)
+    stats = engine.Stats(
+        day="2026-05-06",
+        cooldown_until=datetime(2026, 5, 6, 12, 30, tzinfo=timezone.utc),
+    )
+
+    assert engine._inactive_reason({"paused": False}, stats, now) == "cooldown_after_loss"
+
+
+def test_inactive_reason_returns_none_for_past_or_missing_cooldown():
+    now = datetime(2026, 5, 6, 12, 0, tzinfo=timezone.utc)
+    past_cooldown = engine.Stats(
+        day="2026-05-06",
+        cooldown_until=datetime(2026, 5, 6, 11, 59, tzinfo=timezone.utc),
+    )
+    missing_cooldown = engine.Stats(day="2026-05-06")
+
+    assert engine._inactive_reason({"paused": False}, past_cooldown, now) is None
+    assert engine._inactive_reason({"paused": False}, missing_cooldown, now) is None
+
+
 def test_ema_and_atr_cover_success_and_insufficient_data():
     assert engine._ema([10.0, 12.0, 14.0], period=3) == pytest.approx(12.5)
 
