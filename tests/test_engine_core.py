@@ -2121,3 +2121,129 @@ def test_run_engine_tick_daily_stop_pauses_state_before_ai_status_or_runtime():
     assert calls["trade_appends"] == []
     assert calls["cum_writes"] == []
     assert calls["sleeps"] == [1]
+
+
+def test_run_engine_tick_invalid_grid_mode_writes_skip_status_without_runtime_or_trades():
+    deps, calls = _fake_engine_tick_deps(
+        klines=_engine_test_klines(price=100.0),
+        ai_decision={"enabled": False, "source": "disabled"},
+    )
+    paper = engine.PaperAccount(usdt=1000.0, btc=0.1)
+    stats = engine.Stats(day="2026-05-06", peak_equity=1010.0)
+    grid = engine.GridState(
+        anchor=100.0,
+        spacing_pct=0.01,
+        levels=1,
+        max_exposure_pct=0.10,
+        reserved_usdt=100.0,
+        reserved_btc=0.1,
+        cost_basis_usdt=10.0,
+        orders=[engine.GridOrder(side="BUY", price=99.0, qty_btc=0.01)],
+        active=True,
+    )
+
+    result = engine._run_engine_tick(
+        state={
+            "mode": "paper",
+            "gridMode": "flexy",
+            "maxDailyLossPct": 0.50,
+        },
+        paper=paper,
+        stats=stats,
+        grid=grid,
+        cum=_engine_test_cum(),
+        symbol="BTCUSDT",
+        interval="15m",
+        runtime_snapshot_gate=engine._SnapshotChangeGate(10, 60, 5),
+        engine_pid=123,
+        last_heartbeat_log_monotonic=None,
+        deps=deps,
+    )
+
+    assert result.last_event == "GRID_CONFIG_INVALID"
+    assert len(calls["status_writes"]) == 1
+    status = calls["status_writes"][0]
+    assert status["lastEvent"] == "GRID_CONFIG_INVALID"
+    grid_status = status["stats"]["grid"]
+    assert grid_status["skipped"] is True
+    assert grid_status["skipReason"] == "unsupported_grid_mode"
+    assert "flexy" in grid_status["error"]
+    assert calls["state_writes"] == []
+    assert calls["cum_writes"] == []
+    assert calls["trade_appends"] == []
+    assert calls["runtime_writes"] == []
+    assert calls["maybe_runtime_calls"] == []
+    assert calls["sleeps"] == [1]
+
+
+@pytest.mark.parametrize(
+    ("state_overrides", "cooldown_until", "expected_event", "expected_skip_reason"),
+    [
+        ({"paused": True}, None, "PAUSED", "paused"),
+        (
+            {"paused": False},
+            datetime(2026, 5, 6, 12, 30, tzinfo=timezone.utc),
+            "COOLDOWN",
+            "cooldown_after_loss",
+        ),
+    ],
+)
+def test_run_engine_tick_inactive_paused_or_cooldown_writes_status_runtime_and_returns(
+    state_overrides,
+    cooldown_until,
+    expected_event,
+    expected_skip_reason,
+):
+    deps, calls = _fake_engine_tick_deps(
+        klines=_engine_test_klines(price=100.0),
+        ai_decision={"enabled": False, "source": "disabled"},
+    )
+    paper = engine.PaperAccount(usdt=1000.0, btc=0.1)
+    stats = engine.Stats(day="2026-05-06", peak_equity=1010.0, cooldown_until=cooldown_until)
+    grid = engine.GridState(
+        anchor=100.0,
+        spacing_pct=0.01,
+        levels=1,
+        max_exposure_pct=0.10,
+        reserved_usdt=100.0,
+        reserved_btc=0.1,
+        cost_basis_usdt=10.0,
+        orders=[engine.GridOrder(side="BUY", price=99.0, qty_btc=0.01)],
+        active=True,
+    )
+    state = {
+        "mode": "paper",
+        "gridMode": "scalpy",
+        "maxDailyLossPct": 0.50,
+        **state_overrides,
+    }
+
+    result = engine._run_engine_tick(
+        state=state,
+        paper=paper,
+        stats=stats,
+        grid=grid,
+        cum=_engine_test_cum(),
+        symbol="BTCUSDT",
+        interval="15m",
+        runtime_snapshot_gate=engine._SnapshotChangeGate(10, 60, 5),
+        engine_pid=123,
+        last_heartbeat_log_monotonic=None,
+        deps=deps,
+    )
+
+    assert result.last_event == expected_event
+    assert len(calls["status_writes"]) == 1
+    status = calls["status_writes"][0]
+    assert status["lastEvent"] == expected_event
+    assert "cooldownUntil" in status["stats"]
+    grid_status = status["stats"]["grid"]
+    assert grid_status["skipped"] is True
+    assert grid_status["skipReason"] == expected_skip_reason
+    assert len(calls["maybe_runtime_calls"]) == 1
+    assert calls["runtime_writes"] == []
+    assert calls["state_writes"] == []
+    assert calls["trade_appends"] == []
+    assert calls["cum_writes"] == []
+    assert calls["monotonic_calls"] == []
+    assert calls["sleeps"] == [1]
