@@ -2704,3 +2704,378 @@ def test_run_engine_tick_sell_fill_ai_sells_only_records_exit_loss_without_buy_r
     assert calls["runtime_writes"] == []
     assert calls["state_writes"] == []
     assert calls["sleeps"] == [1]
+
+
+def test_run_engine_tick_trailing_stop_arms_updates_stop_without_exit():
+    deps, calls = _fake_engine_tick_deps(
+        klines=_engine_test_klines(price=100.0),
+        ai_decision={"enabled": False, "source": "disabled"},
+    )
+    paper = engine.PaperAccount(usdt=1000.0, btc=0.1)
+    stats = engine.Stats(day="2026-05-06", peak_equity=1010.0)
+    grid = engine.GridState(
+        anchor=100.0,
+        spacing_pct=0.01,
+        levels=1,
+        max_exposure_pct=0.10,
+        reserved_usdt=0.0,
+        reserved_btc=0.1,
+        cost_basis_usdt=9.0,
+        orders=[],
+        active=True,
+    )
+
+    result = engine._run_engine_tick(
+        state={
+            "mode": "paper",
+            "gridMode": "scalpy",
+            "gridTrailActive": True,
+            "gridTrailAtrMult": 2.0,
+            "gridTrailArmTrendStrength": 0.0,
+            "gridTrailArmAfterAtr": 1.0,
+            "gridTrailMinNetProfitPct": 0.001,
+            "gridTrailForceExitTrendStrength": 0.02,
+            "maxDailyLossPct": 0.99,
+        },
+        paper=paper,
+        stats=stats,
+        grid=grid,
+        cum=_engine_test_cum(),
+        symbol="BTCUSDT",
+        interval="15m",
+        runtime_snapshot_gate=engine._SnapshotChangeGate(10, 60, 5),
+        engine_pid=123,
+        last_heartbeat_log_monotonic=0.0,
+        deps=deps,
+    )
+
+    assert result.last_event == "TICK"
+    assert grid.__dict__["trail_armed"] is True
+    assert grid.__dict__["trail_stop"] > 0
+    assert calls["trade_appends"] == []
+    assert calls["cum_writes"] == []
+    assert len(calls["status_writes"]) == 1
+    assert len(calls["maybe_runtime_calls"]) == 1
+    assert calls["sleeps"] == [1]
+
+
+@pytest.mark.parametrize(
+    ("cost_basis_usdt", "fee_bps"),
+    [
+        pytest.param(99.5, 100, id="gross-green-net-red"),
+        pytest.param(101.0, 10, id="net-loss-without-profit-cushion"),
+    ],
+)
+def test_run_engine_tick_trailing_stop_guardrail_skip_no_writes(
+    cost_basis_usdt,
+    fee_bps,
+):
+    deps, calls = _fake_engine_tick_deps(
+        klines=_engine_test_klines(price=100.0),
+        ai_decision={"enabled": False, "source": "disabled"},
+    )
+    paper = engine.PaperAccount(usdt=0.0, btc=1.0)
+    stats = engine.Stats(day="2026-05-06", peak_equity=100.0)
+    grid = engine.GridState(
+        anchor=100.0,
+        spacing_pct=0.01,
+        levels=1,
+        max_exposure_pct=0.10,
+        reserved_usdt=0.0,
+        reserved_btc=1.0,
+        cost_basis_usdt=cost_basis_usdt,
+        orders=[],
+        active=True,
+    )
+    grid.__dict__["trail_armed"] = True
+    grid.__dict__["trail_stop"] = 100.0
+
+    result = engine._run_engine_tick(
+        state={
+            "mode": "paper",
+            "gridMode": "scalpy",
+            "gridTrailActive": True,
+            "gridTrailAtrMult": 2.0,
+            "gridTrailArmTrendStrength": 0.02,
+            "gridTrailArmAfterAtr": 1.0,
+            "gridTrailMinNetProfitPct": 0.001,
+            "gridTrailForceExitTrendStrength": 0.02,
+            "paperMarketSlipBps": 0,
+            "feeBps": fee_bps,
+            "maxDailyLossPct": 0.99,
+        },
+        paper=paper,
+        stats=stats,
+        grid=grid,
+        cum=_engine_test_cum(),
+        symbol="BTCUSDT",
+        interval="15m",
+        runtime_snapshot_gate=engine._SnapshotChangeGate(10, 60, 5),
+        engine_pid=123,
+        last_heartbeat_log_monotonic=0.0,
+        deps=deps,
+    )
+
+    assert result.last_event == "TICK"
+    assert calls["status_writes"] == []
+    assert calls["runtime_writes"] == []
+    assert calls["maybe_runtime_calls"] == []
+    assert calls["trade_appends"] == []
+    assert calls["cum_writes"] == []
+    assert calls["sleeps"] == [1]
+
+
+@pytest.mark.parametrize(
+    ("cost_basis_usdt", "force_exit_trend_strength", "expected_wins", "expected_losses"),
+    [
+        (90.0, 0.02, 1, 0),
+        (101.0, 0.0, 0, 1),
+    ],
+)
+def test_run_engine_tick_trailing_stop_exit_writes_status_runtime_cum(
+    cost_basis_usdt,
+    force_exit_trend_strength,
+    expected_wins,
+    expected_losses,
+):
+    deps, calls = _fake_engine_tick_deps(
+        klines=_engine_test_klines(price=100.0),
+        ai_decision={"enabled": False, "source": "disabled"},
+    )
+    _make_tick_trade_events_stateful(deps, calls)
+    paper = engine.PaperAccount(usdt=0.0, btc=1.0)
+    stats = engine.Stats(day="2026-05-06", peak_equity=100.0)
+    grid = engine.GridState(
+        anchor=100.0,
+        spacing_pct=0.01,
+        levels=1,
+        max_exposure_pct=0.10,
+        reserved_usdt=0.0,
+        reserved_btc=1.0,
+        cost_basis_usdt=cost_basis_usdt,
+        orders=[engine.GridOrder(side="BUY", price=50.0, qty_btc=0.1)],
+        active=True,
+    )
+    grid.__dict__["trail_armed"] = True
+    grid.__dict__["trail_stop"] = 100.0
+
+    result = engine._run_engine_tick(
+        state={
+            "mode": "paper",
+            "gridMode": "scalpy",
+            "gridTrailActive": True,
+            "gridTrailAtrMult": 2.0,
+            "gridTrailArmTrendStrength": 0.02,
+            "gridTrailArmAfterAtr": 1.0,
+            "gridTrailMinNetProfitPct": 0.001,
+            "gridTrailForceExitTrendStrength": force_exit_trend_strength,
+            "paperMarketSlipBps": 0,
+            "feeBps": 10,
+            "cooldownMinutesAfterLoss": 20,
+            "maxDailyLossPct": 0.99,
+        },
+        paper=paper,
+        stats=stats,
+        grid=grid,
+        cum=_engine_test_cum(),
+        symbol="BTCUSDT",
+        interval="15m",
+        runtime_snapshot_gate=engine._SnapshotChangeGate(10, 60, 5),
+        engine_pid=123,
+        last_heartbeat_log_monotonic=0.0,
+        deps=deps,
+    )
+
+    assert result.last_event == "EXIT"
+    assert paper.btc == 0
+    assert grid.active is False
+    assert grid.orders == []
+    assert grid.cost_basis_usdt == 0
+
+    assert len(calls["cum_writes"]) == 1
+    cum_write = calls["cum_writes"][0]
+    assert cum_write["trades"] == 1
+    assert cum_write["wins"] == expected_wins
+    assert cum_write["losses"] == expected_losses
+
+    assert len(calls["trade_appends"]) == 1
+    trade_event = calls["trade_appends"][0]
+    assert trade_event["event"] == "EXIT"
+    assert trade_event["reason"] == "TRAIL_STOP"
+    assert trade_event["type"] == "PAPER_MARKET"
+
+    assert len(calls["status_writes"]) == 1
+    assert calls["status_writes"][0]["lastEvent"] == "EXIT"
+    assert len(calls["runtime_writes"]) == 1
+    assert calls["maybe_runtime_calls"] == []
+    assert calls["sleeps"] == [1]
+
+    if expected_losses:
+        assert stats.cooldown_until == datetime(2026, 5, 6, 12, 20, tzinfo=timezone.utc)
+    else:
+        assert stats.cooldown_until is None
+
+
+def test_run_engine_tick_ai_flatten_low_confidence_falls_through_without_exit():
+    deps, calls = _fake_engine_tick_deps(
+        klines=_engine_test_klines(price=100.0),
+        ai_decision={
+            "enabled": True,
+            "stale": False,
+            "dryRun": False,
+            "shadowMode": False,
+            "gridAllowed": True,
+            "flattenRecommended": True,
+            "pauseNewBuys": True,
+            "allowSellsOnly": True,
+            "riskAction": "flatten",
+            "recommendedMode": "scalpy",
+            "confidence": 0.74,
+        },
+    )
+    paper = engine.PaperAccount(usdt=0.0, btc=1.0)
+    stats = engine.Stats(day="2026-05-06", peak_equity=100.0)
+    grid = engine.GridState(
+        anchor=100.0,
+        spacing_pct=0.01,
+        levels=1,
+        max_exposure_pct=0.10,
+        reserved_usdt=0.0,
+        reserved_btc=1.0,
+        cost_basis_usdt=90.0,
+        orders=[],
+        active=True,
+    )
+
+    result = engine._run_engine_tick(
+        state={
+            "mode": "paper",
+            "gridMode": "scalpy",
+            "aiEnabled": True,
+            "aiMinConfidence": 0.55,
+            "gridTrailActive": False,
+            "maxDailyLossPct": 0.99,
+        },
+        paper=paper,
+        stats=stats,
+        grid=grid,
+        cum=_engine_test_cum(),
+        symbol="BTCUSDT",
+        interval="15m",
+        runtime_snapshot_gate=engine._SnapshotChangeGate(10, 60, 5),
+        engine_pid=123,
+        last_heartbeat_log_monotonic=0.0,
+        deps=deps,
+    )
+
+    assert result.last_event == "TICK"
+    assert calls["trade_appends"] == []
+    assert calls["cum_writes"] == []
+    assert grid.active is True
+    assert paper.btc == pytest.approx(1.0)
+    assert len(calls["status_writes"]) == 1
+    assert len(calls["maybe_runtime_calls"]) == 1
+    assert calls["sleeps"] == [1]
+
+
+@pytest.mark.parametrize(
+    ("cost_basis_usdt", "expected_wins", "expected_losses"),
+    [
+        (90.0, 1, 0),
+        (101.0, 0, 1),
+    ],
+)
+def test_run_engine_tick_ai_flatten_high_confidence_appends_exit_and_sets_outcome(
+    cost_basis_usdt,
+    expected_wins,
+    expected_losses,
+):
+    deps, calls = _fake_engine_tick_deps(
+        klines=_engine_test_klines(price=100.0),
+        ai_decision={
+            "enabled": True,
+            "stale": False,
+            "dryRun": False,
+            "shadowMode": False,
+            "gridAllowed": True,
+            "flattenRecommended": True,
+            "pauseNewBuys": True,
+            "allowSellsOnly": True,
+            "riskAction": "flatten",
+            "recommendedMode": "scalpy",
+            "confidence": 0.80,
+            "decisionId": "decision-exit-1",
+            "promptVersion": "test-prompt",
+            "model": "test-model",
+        },
+    )
+    _make_tick_trade_events_stateful(deps, calls)
+    paper = engine.PaperAccount(usdt=0.0, btc=1.0)
+    stats = engine.Stats(day="2026-05-06", peak_equity=100.0)
+    grid = engine.GridState(
+        anchor=100.0,
+        spacing_pct=0.01,
+        levels=1,
+        max_exposure_pct=0.10,
+        reserved_usdt=0.0,
+        reserved_btc=1.0,
+        cost_basis_usdt=cost_basis_usdt,
+        orders=[engine.GridOrder(side="BUY", price=50.0, qty_btc=0.1)],
+        active=True,
+    )
+
+    result = engine._run_engine_tick(
+        state={
+            "mode": "paper",
+            "gridMode": "scalpy",
+            "aiEnabled": True,
+            "aiMinConfidence": 0.55,
+            "gridTrailActive": False,
+            "paperMarketSlipBps": 0,
+            "feeBps": 10,
+            "cooldownMinutesAfterLoss": 20,
+            "maxDailyLossPct": 0.99,
+        },
+        paper=paper,
+        stats=stats,
+        grid=grid,
+        cum=_engine_test_cum(),
+        symbol="BTCUSDT",
+        interval="15m",
+        runtime_snapshot_gate=engine._SnapshotChangeGate(10, 60, 5),
+        engine_pid=123,
+        last_heartbeat_log_monotonic=0.0,
+        deps=deps,
+    )
+
+    assert len(calls["trade_appends"]) == 1
+    trade_event = calls["trade_appends"][0]
+    assert trade_event["event"] == "EXIT"
+    assert trade_event["reason"] == "AI_FLATTEN"
+    assert trade_event["type"] == "PAPER_MARKET"
+    assert trade_event["aiDecisionId"] == "decision-exit-1"
+    assert trade_event["aiRiskAction"] == "flatten"
+    assert trade_event["aiPromptVersion"] == "test-prompt"
+    assert trade_event["aiConfidence"] == pytest.approx(0.80)
+    assert trade_event["aiModel"] == "test-model"
+
+    assert paper.btc == 0
+    assert grid.active is False
+    assert grid.orders == []
+    assert len(calls["cum_writes"]) == 1
+    cum_write = calls["cum_writes"][0]
+    assert cum_write["trades"] == 1
+    assert cum_write["wins"] == expected_wins
+    assert cum_write["losses"] == expected_losses
+
+    if expected_losses:
+        assert stats.cooldown_until == datetime(2026, 5, 6, 12, 20, tzinfo=timezone.utc)
+    else:
+        assert stats.cooldown_until is None
+
+    assert result.last_event == "AI_SKIP"
+    assert len(calls["status_writes"]) == 1
+    assert calls["status_writes"][0]["lastEvent"] == "AI_SKIP"
+    assert calls["runtime_writes"] == []
+    assert calls["maybe_runtime_calls"] == []
+    assert calls["sleeps"] == [1]
