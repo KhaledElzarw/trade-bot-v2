@@ -6,6 +6,131 @@ import pytest
 import engine
 
 
+def _engine_test_cum() -> dict:
+    return {
+        "sinceUtc": "2026-05-06T00:00:00+00:00",
+        "realizedPnlUsdt": 0.0,
+        "grossRealizedPnlUsdt": 0.0,
+        "feesPaidUsdt": 0.0,
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+    }
+
+
+def _engine_test_klines(*, price: float = 100.0, count: int = 210) -> list:
+    rows = []
+    for idx in range(count):
+        rows.append([
+            1_700_000_000_000 + idx,
+            str(price),
+            str(price + 1.0),
+            str(price - 1.0),
+            str(price),
+            "1.0",
+            1_700_000_060_000 + idx,
+            "100.0",
+        ])
+    return rows
+
+
+def _fake_engine_tick_deps(
+    *,
+    klines: list | None = None,
+    ai_decision: dict | None = None,
+    trade_events: list[dict] | None = None,
+    cum: dict | None = None,
+    monotonic_values: list[float] | None = None,
+    now: datetime | None = None,
+) -> tuple[engine._EngineTickDeps, dict]:
+    calls = {
+        "fetch_klines": [],
+        "state_writes": [],
+        "cum_reads": [],
+        "cum_writes": [],
+        "trade_event_loads": [],
+        "status_writes": [],
+        "runtime_writes": [],
+        "maybe_runtime_calls": [],
+        "trade_appends": [],
+        "logs": [],
+        "sleeps": [],
+        "ai_decision_calls": [],
+        "monotonic_calls": [],
+    }
+    kline_payload = klines if klines is not None else _engine_test_klines()
+    ai_payload = ai_decision if ai_decision is not None else {"enabled": False, "source": "disabled"}
+    event_payload = trade_events if trade_events is not None else []
+    cum_payload = cum if cum is not None else _engine_test_cum()
+    monotonic_payload = list(monotonic_values if monotonic_values is not None else [0.0])
+    now_value = now or datetime(2026, 5, 6, 12, 0, tzinfo=timezone.utc)
+
+    def fetch_klines(symbol: str, interval: str, limit: int) -> list:
+        calls["fetch_klines"].append((symbol, interval, limit))
+        return kline_payload
+
+    def write_state(state: dict) -> None:
+        calls["state_writes"].append(dict(state))
+
+    def read_cum() -> dict:
+        calls["cum_reads"].append(True)
+        return dict(cum_payload)
+
+    def write_cum(payload: dict) -> None:
+        calls["cum_writes"].append(dict(payload))
+
+    def load_trade_events() -> list[dict]:
+        calls["trade_event_loads"].append(True)
+        return list(event_payload)
+
+    def write_status(payload: dict) -> None:
+        calls["status_writes"].append(payload)
+
+    def write_runtime_state(payload: dict) -> None:
+        calls["runtime_writes"].append(payload)
+
+    def maybe_write_runtime_state(gate: engine._SnapshotChangeGate, payload: dict) -> tuple[bool, str]:
+        calls["maybe_runtime_calls"].append((gate, payload))
+        return True, "test"
+
+    def append_trade(event: dict) -> None:
+        calls["trade_appends"].append(dict(event))
+
+    def log(message: str) -> None:
+        calls["logs"].append(message)
+
+    def sleep(seconds: float) -> None:
+        calls["sleeps"].append(seconds)
+
+    def monotonic() -> float:
+        calls["monotonic_calls"].append(True)
+        if monotonic_payload:
+            return monotonic_payload.pop(0)
+        return 0.0
+
+    def read_ai_decision(state: dict) -> dict:
+        calls["ai_decision_calls"].append(dict(state))
+        return dict(ai_payload)
+
+    deps = engine._EngineTickDeps(
+        fetch_klines=fetch_klines,
+        write_state=write_state,
+        read_cum=read_cum,
+        write_cum=write_cum,
+        load_trade_events=load_trade_events,
+        write_status=write_status,
+        write_runtime_state=write_runtime_state,
+        maybe_write_runtime_state=maybe_write_runtime_state,
+        append_trade=append_trade,
+        log=log,
+        sleep=sleep,
+        monotonic=monotonic,
+        utc_now=lambda: now_value,
+        read_ai_decision=read_ai_decision,
+    )
+    return deps, calls
+
+
 def test_build_grid_orders_sorted_by_distance():
     orders = engine._build_grid_orders(anchor=100.0, spacing_pct=0.01, levels=2, qty_per_level=0.1)
 
@@ -1897,3 +2022,102 @@ def test_heartbeat_log_gate_can_be_quiet_without_affecting_runtime_loop():
     assert engine._should_emit_heartbeat_log(None, 60.0, now_monotonic=0.0) is True
     assert engine._should_emit_heartbeat_log(0.0, 60.0, now_monotonic=30.0) is False
     assert engine._should_emit_heartbeat_log(0.0, 60.0, now_monotonic=60.0) is True
+
+
+def test_run_engine_tick_normal_no_fill_updates_status_runtime_without_trade_side_effects():
+    deps, calls = _fake_engine_tick_deps(
+        klines=_engine_test_klines(price=100.0),
+        ai_decision={"enabled": False, "source": "disabled"},
+        monotonic_values=[0.5],
+    )
+    paper = engine.PaperAccount(usdt=1000.0, btc=0.1)
+    stats = engine.Stats(day="2026-05-06", peak_equity=1010.0)
+    grid = engine.GridState(
+        anchor=100.0,
+        spacing_pct=0.01,
+        levels=2,
+        max_exposure_pct=0.10,
+        reserved_usdt=100.0,
+        reserved_btc=0.1,
+        cost_basis_usdt=10.0,
+        orders=[
+            engine.GridOrder(side="BUY", price=50.0, qty_btc=0.01),
+            engine.GridOrder(side="SELL", price=150.0, qty_btc=0.01),
+        ],
+        active=True,
+    )
+    cum = _engine_test_cum()
+
+    result = engine._run_engine_tick(
+        state={
+            "mode": "paper",
+            "gridMode": "scalpy",
+            "gridTrailActive": False,
+            "maxDailyLossPct": 0.50,
+        },
+        paper=paper,
+        stats=stats,
+        grid=grid,
+        cum=cum,
+        symbol="BTCUSDT",
+        interval="15m",
+        runtime_snapshot_gate=engine._SnapshotChangeGate(10, 60, 5),
+        engine_pid=123,
+        last_heartbeat_log_monotonic=0.0,
+        deps=deps,
+    )
+
+    assert result.last_event == "TICK"
+    assert result.paper is paper
+    assert result.stats is stats
+    assert result.grid is grid
+    assert result.cum is cum
+    assert calls["fetch_klines"] == [("BTCUSDT", "15m", 210)]
+    assert len(calls["status_writes"]) == 1
+    assert calls["status_writes"][0]["lastEvent"] == "TICK"
+    assert len(calls["maybe_runtime_calls"]) == 1
+    assert calls["maybe_runtime_calls"][0][1]["enginePid"] == 123
+    assert calls["trade_appends"] == []
+    assert calls["cum_writes"] == []
+    assert calls["state_writes"] == []
+    assert calls["runtime_writes"] == []
+    assert calls["sleeps"] == [1]
+
+
+def test_run_engine_tick_daily_stop_pauses_state_before_ai_status_or_runtime():
+    deps, calls = _fake_engine_tick_deps(klines=_engine_test_klines(price=100.0))
+    paper = engine.PaperAccount(usdt=800.0, btc=0.0)
+    stats = engine.Stats(day="2026-05-06", peak_equity=1000.0)
+    cum = _engine_test_cum()
+
+    result = engine._run_engine_tick(
+        state={
+            "mode": "paper",
+            "gridMode": "scalpy",
+            "maxDailyLossPct": 0.10,
+        },
+        paper=paper,
+        stats=stats,
+        grid=None,
+        cum=cum,
+        symbol="BTCUSDT",
+        interval="15m",
+        runtime_snapshot_gate=engine._SnapshotChangeGate(10, 60, 5),
+        engine_pid=123,
+        last_heartbeat_log_monotonic=None,
+        deps=deps,
+    )
+
+    assert result.last_event == "DAILY_STOP"
+    assert result.paper is paper
+    assert result.stats is stats
+    assert result.grid is None
+    assert result.cum is cum
+    assert calls["state_writes"] == [{"mode": "paper", "gridMode": "scalpy", "maxDailyLossPct": 0.10, "paused": True}]
+    assert calls["ai_decision_calls"] == []
+    assert calls["status_writes"] == []
+    assert calls["runtime_writes"] == []
+    assert calls["maybe_runtime_calls"] == []
+    assert calls["trade_appends"] == []
+    assert calls["cum_writes"] == []
+    assert calls["sleeps"] == [1]

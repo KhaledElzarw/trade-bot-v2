@@ -1,6 +1,7 @@
 import json
 import os
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
@@ -755,6 +756,34 @@ class Stats:
 
 
 @dataclass
+class _EngineTickDeps:
+    fetch_klines: Callable[[str, str, int], list]
+    write_state: Callable[[dict], None]
+    read_cum: Callable[[], dict]
+    write_cum: Callable[[dict], None]
+    load_trade_events: Callable[[], list[dict]]
+    write_status: Callable[[dict], None]
+    write_runtime_state: Callable[[dict], None]
+    maybe_write_runtime_state: Callable[[_SnapshotChangeGate, dict], tuple[bool, str]]
+    append_trade: Callable[[dict], None]
+    log: Callable[[str], None]
+    sleep: Callable[[float], None]
+    monotonic: Callable[[], float]
+    utc_now: Callable[[], datetime]
+    read_ai_decision: Callable[[dict], dict]
+
+
+@dataclass
+class _EngineTickResult:
+    paper: PaperAccount
+    stats: Stats
+    grid: GridState | None
+    cum: dict
+    last_heartbeat_log_monotonic: float | None
+    last_event: str
+
+
+@dataclass
 class _EngineBootstrap:
     paper: PaperAccount
     stats: Stats
@@ -1298,6 +1327,658 @@ def _fill_order_paper(
     }
 
 
+def _engine_tick_deps(md) -> _EngineTickDeps:
+    return _EngineTickDeps(
+        fetch_klines=lambda symbol, interval, limit: md.klines(symbol=symbol, interval=interval, limit=limit),
+        write_state=lambda state: _write_json(STATE_PATH, state),
+        read_cum=_read_cum,
+        write_cum=_write_cum,
+        load_trade_events=_load_trade_events,
+        write_status=_write_status,
+        write_runtime_state=_write_runtime_state,
+        maybe_write_runtime_state=_maybe_write_runtime_state,
+        append_trade=_append_trade,
+        log=_log,
+        sleep=time.sleep,
+        monotonic=time.monotonic,
+        utc_now=_utc_now,
+        read_ai_decision=_read_ai_decision_for_engine,
+    )
+
+
+def _run_engine_tick(
+    *,
+    state: dict,
+    paper: PaperAccount,
+    stats: Stats,
+    grid: GridState | None,
+    cum: dict,
+    symbol: str,
+    interval: str,
+    runtime_snapshot_gate: _SnapshotChangeGate,
+    engine_pid: int,
+    last_heartbeat_log_monotonic: float | None,
+    deps: _EngineTickDeps,
+) -> _EngineTickResult:
+    def _result(last_event: str) -> _EngineTickResult:
+        return _EngineTickResult(
+            paper=paper,
+            stats=stats,
+            grid=grid,
+            cum=cum,
+            last_heartbeat_log_monotonic=last_heartbeat_log_monotonic,
+            last_event=last_event,
+        )
+
+    now = deps.utc_now()
+
+    kl = deps.fetch_klines(symbol, interval, 210)
+    market = _market_indicators_from_klines(kl)
+    close = market["close"]
+    high = market["high"]  # noqa: F841
+    low = market["low"]  # noqa: F841
+    price = market["price"]
+    candle_hi = market["candle_hi"]
+    candle_lo = market["candle_lo"]
+    atr = market["atr"]
+    ema20 = market["ema20"]  # noqa: F841
+    ema50 = market["ema50"]  # noqa: F841
+    trend_strength = market["trend_strength"]
+
+    eq = paper.equity(price)
+    stats = _roll_stats_if_new_day(stats, now, eq)
+    stats = _update_equity_drawdown(stats, eq)
+
+    # daily stop
+    daily_stop_hit, daily_loss_pct = _daily_stop_decision(
+        stats,
+        eq,
+        float(state.get("maxDailyLossPct", 0.10)),
+    )
+    if daily_stop_hit:
+        deps.log(f"DAILY_STOP hit daily_loss_pct={daily_loss_pct:.4f} >= {state.get('maxDailyLossPct')} -> pausing")
+        state["paused"] = True
+        deps.write_state(state)
+        deps.sleep(1)
+        return _result("DAILY_STOP")
+
+    ai_signal = deps.read_ai_decision(state)
+    ai_live = _ai_controls_active(ai_signal)
+    ai_pause_new_buys = ai_live and (ai_signal.get("pauseNewBuys") or not ai_signal.get("gridAllowed", True))
+    ai_sells_only = ai_live and (ai_signal.get("allowSellsOnly") or ai_signal.get("riskAction") in {"sells_only", "flatten"})
+    try:
+        grid_mode = _resolve_grid_mode(state, ai_signal, ai_live)
+    except ValueError as exc:
+        deps.log(f"GRID_CONFIG_INVALID {exc}")
+        event_rows = deps.load_trade_events()
+        entries_count = sum(1 for ev in event_rows if ev.get("event") == "ENTER")
+        exits_count = sum(1 for ev in event_rows if ev.get("event") == "EXIT")
+        has_open_position = paper.btc > 0
+        cum = deps.read_cum()
+        deps.write_status(_status_payload(
+            state=state,
+            symbol=symbol,
+            interval=interval,
+            price=price,
+            paper=paper,
+            position_payload=_position_payload(paper, grid, price),
+            stats_payload=_status_stats_payload(
+                stats=stats,
+                cum=cum,
+                entries_count=entries_count,
+                exits_count=exits_count,
+                has_open_position=has_open_position,
+                trend_strength=trend_strength,
+                grid_payload=_grid_telemetry(
+                    state=state,
+                    ai_signal=ai_signal,
+                    effective_mode=None,
+                    spacing_pct=grid.spacing_pct if grid else None,
+                    levels=grid.levels if grid else None,
+                    open_orders=len(grid.orders) if grid else 0,
+                    skipped=True,
+                    skipReason="unsupported_grid_mode",
+                    error=str(exc),
+                ),
+                ai_signal=ai_signal,
+            ),
+            last_event="GRID_CONFIG_INVALID",
+        ))
+        deps.sleep(1)
+        return _result("GRID_CONFIG_INVALID")
+
+    inactive_reason = _inactive_reason(state, stats, now)
+
+    # Keep dashboard status fresh while inactive; runtime snapshots are gated below.
+    if inactive_reason:
+        event_rows = deps.load_trade_events()
+        entries_count = sum(1 for ev in event_rows if ev.get("event") == "ENTER")
+        exits_count = sum(1 for ev in event_rows if ev.get("event") == "EXIT")
+        has_open_position = paper.btc > 0
+        cum = deps.read_cum()
+        status_payload = _status_payload(
+            state=state,
+            symbol=symbol,
+            interval=interval,
+            price=price,
+            paper=paper,
+            position_payload=_position_payload(paper, grid, price),
+            stats_payload=_status_stats_payload(
+                stats=stats,
+                cum=cum,
+                entries_count=entries_count,
+                exits_count=exits_count,
+                has_open_position=has_open_position,
+                trend_strength=trend_strength,
+                include_cooldown=True,
+                grid_payload=_grid_telemetry(
+                    state=state,
+                    ai_signal=ai_signal,
+                    effective_mode=grid_mode,
+                    spacing_pct=grid.spacing_pct if grid else None,
+                    levels=grid.levels if grid else None,
+                    open_orders=len(grid.orders) if grid else 0,
+                    skipped=True,
+                    skipReason=inactive_reason,
+                ),
+                ai_signal=ai_signal,
+            ),
+            last_event="PAUSED" if inactive_reason == "paused" else "COOLDOWN",
+        )
+        deps.write_status(status_payload)
+        runtime_payload = _runtime_payload(
+            engine_pid=engine_pid,
+            paper=paper,
+            stats=stats,
+            entries_count=entries_count,
+            exits_count=exits_count,
+            has_open_position=has_open_position,
+            market_payload=_build_runtime_market_payload(
+                kl,
+                close,
+                price=price,
+                candle_hi=candle_hi,
+                candle_lo=candle_lo,
+            ),
+            grid=grid,
+            ai_signal=ai_signal,
+            cum=cum,
+        )
+        deps.maybe_write_runtime_state(runtime_snapshot_gate, runtime_payload)
+        deps.sleep(1)
+        return _result("PAUSED" if inactive_reason == "paused" else "COOLDOWN")
+
+    # Trailing stop (ATR-based): trail up, never down, then exit via stop loss.
+    trail_mult = float(state.get("gridTrailAtrMult", 2.0))
+    trail_active = bool(state.get("gridTrailActive", True))
+
+    if trail_active and grid and paper.btc > 0 and grid.cost_basis_usdt > 0:
+        avg_cost = grid.cost_basis_usdt / paper.btc if paper.btc else 0.0
+        candidate_stop = price - trail_mult * atr
+        market_slip_bps = float(state.get("paperMarketSlipBps", 12.0))
+
+        # Arm trailing stop only when breakout risk is elevated OR we have a meaningful cushion.
+        arm_trend = float(state.get("gridTrailArmTrendStrength", 0.004))
+        arm_after_atr = float(state.get("gridTrailArmAfterAtr", 1.0))
+        armed = bool(grid.__dict__.get("trail_armed", False))
+        if (trend_strength >= arm_trend) or (avg_cost and price >= avg_cost + arm_after_atr * atr):
+            grid.__dict__["trail_armed"] = True
+            armed = True
+
+        # Only trail once armed AND at/above cost basis; never lower the stop.
+        if armed and avg_cost and price >= avg_cost:
+            prev = float(grid.__dict__.get("trail_stop", 0.0) or 0.0)
+            new_stop = max(prev, candidate_stop)
+            grid.__dict__["trail_stop"] = new_stop
+
+        trail_stop = float(grid.__dict__.get("trail_stop", 0.0) or 0.0)
+        if armed and trail_stop and price <= trail_stop:
+            fee_rate = float(state.get("feeBps", 10)) / 10_000.0
+            qty = paper.btc
+            effective_exit_price = price * (1 - (market_slip_bps / 10_000.0))
+            gross = qty * effective_exit_price
+            fee = gross * fee_rate
+            proceeds = gross - fee
+            gross_realized = gross - grid.cost_basis_usdt
+            realized = proceeds - grid.cost_basis_usdt
+
+            # Guardrail: avoid exits that look green gross but end red net after fees/slippage.
+            # Only allow a net-loss trail exit when breakout risk is genuinely strong enough to justify an escape.
+            min_profit_pct = float(state.get("gridTrailMinNetProfitPct", 0.0010))  # 0.10%
+            force_exit_trend = float(state.get("gridTrailForceExitTrendStrength", 0.02))
+            want_profit = (avg_cost > 0) and (price >= avg_cost * (1 + min_profit_pct))
+            gross_positive_net_negative = (gross_realized > 0.0 and realized < 0.0)
+            strong_escape = trend_strength >= force_exit_trend
+            if gross_positive_net_negative and not strong_escape:
+                deps.sleep(1)
+                return _result("TICK")
+            if (realized < 0) and (not strong_escape) and (not want_profit):
+                # Ignore the stop for now; let the grid work instead of paying fees repeatedly.
+                deps.sleep(1)
+                return _result("TICK")
+
+            paper.btc = 0.0
+            paper.usdt += proceeds
+            grid.cost_basis_usdt = 0.0
+            grid.active = False
+            grid.orders = []
+
+            cum = deps.read_cum()
+            cum["trades"] = int(cum.get("trades", 0)) + 1
+            cum["feesPaidUsdt"] = float(cum.get("feesPaidUsdt", 0.0)) + fee
+            cum["grossRealizedPnlUsdt"] = float(cum.get("grossRealizedPnlUsdt", 0.0)) + gross_realized
+            stats.trades += 1
+            if realized >= 0:
+                cum["wins"] = int(cum.get("wins", 0)) + 1
+                stats.wins += 1
+            else:
+                cum["losses"] = int(cum.get("losses", 0)) + 1
+                stats.losses += 1
+                mins = int(state.get("cooldownMinutesAfterLoss", 20))
+                stats.cooldown_until = now + timedelta(minutes=mins)
+            deps.write_cum(cum)
+            stats.pnl_usdt = float(cum.get("realizedPnlUsdt", 0.0))
+
+            deps.log(f"GRID_TRAIL_STOP hit price={price:.2f} stop={trail_stop:.2f} pnl={realized:.2f}")
+            exit_event = {
+                "tsUtc": deps.utc_now().isoformat(),
+                "event": "EXIT",
+                "side": "SELL",
+                "reason": "TRAIL_STOP",
+                "type": "PAPER_MARKET",
+                "symbol": symbol,
+                "qtyBtc": qty,
+                "price": effective_exit_price,
+                "quote": "USDT",
+                "notionalUsdt": gross,
+                "feeUsdt": fee,
+                "slippageBps": market_slip_bps,
+                "grossRealizedPnlUsdt": gross_realized,
+                "realizedPnlUsdt": realized,
+                "paper": True,
+            }
+            _attach_ai_event_fields(exit_event, ai_signal)
+            deps.append_trade(exit_event)
+
+            event_rows = deps.load_trade_events()
+            entries_count = sum(1 for ev in event_rows if ev.get("event") == "ENTER")
+            exits_count = sum(1 for ev in event_rows if ev.get("event") == "EXIT")
+            deps.write_status(_status_payload(
+                state=state,
+                symbol=symbol,
+                interval=interval,
+                price=price,
+                paper=paper,
+                position_payload=None,
+                stats_payload=_status_stats_payload(
+                    stats=stats,
+                    cum=cum,
+                    entries_count=entries_count,
+                    exits_count=exits_count,
+                    has_open_position=False,
+                    trend_strength=trend_strength,
+                    grid_payload=_grid_telemetry(
+                        state=state,
+                        ai_signal=ai_signal,
+                        effective_mode=grid_mode,
+                        spacing_pct=grid.spacing_pct if grid else None,
+                        levels=grid.levels if grid else None,
+                        open_orders=0,
+                    ),
+                    ai_signal=ai_signal,
+                ),
+                last_event="EXIT",
+            ))
+            deps.write_runtime_state(_runtime_payload(
+                engine_pid=engine_pid,
+                paper=paper,
+                stats=stats,
+                entries_count=entries_count,
+                exits_count=exits_count,
+                has_open_position=False,
+                market_payload=_build_runtime_market_payload(
+                    kl,
+                    close,
+                    price=price,
+                    candle_hi=candle_hi,
+                    candle_lo=candle_lo,
+                ),
+                grid=grid,
+                ai_signal=ai_signal,
+                cum=cum,
+            ))
+
+            deps.sleep(1)
+            return _result("EXIT")
+
+    if ai_live and ai_signal.get("flattenRecommended") and paper.btc > 0 and grid and grid.cost_basis_usdt > 0:
+        min_flatten_conf = max(float(state.get("aiMinConfidence", 0.55) or 0.55), 0.75)
+        if float(ai_signal.get("confidence", 0.0) or 0.0) >= min_flatten_conf:
+            fee_rate = float(state.get("feeBps", 10)) / 10_000.0
+            market_slip_bps = float(state.get("paperMarketSlipBps", 12.0))
+            qty = paper.btc
+            effective_exit_price = price * (1 - (market_slip_bps / 10_000.0))
+            gross = qty * effective_exit_price
+            fee = gross * fee_rate
+            proceeds = gross - fee
+            gross_realized = gross - grid.cost_basis_usdt
+            realized = proceeds - grid.cost_basis_usdt
+
+            paper.btc = 0.0
+            paper.usdt += proceeds
+            grid.cost_basis_usdt = 0.0
+            grid.active = False
+            grid.orders = []
+
+            cum = deps.read_cum()
+            cum["trades"] = int(cum.get("trades", 0)) + 1
+            cum["feesPaidUsdt"] = float(cum.get("feesPaidUsdt", 0.0)) + fee
+            cum["grossRealizedPnlUsdt"] = float(cum.get("grossRealizedPnlUsdt", 0.0)) + gross_realized
+            stats.trades += 1
+            if realized >= 0:
+                cum["wins"] = int(cum.get("wins", 0)) + 1
+                stats.wins += 1
+            else:
+                cum["losses"] = int(cum.get("losses", 0)) + 1
+                stats.losses += 1
+                mins = int(state.get("cooldownMinutesAfterLoss", 20))
+                stats.cooldown_until = now + timedelta(minutes=mins)
+            deps.write_cum(cum)
+            stats.pnl_usdt = float(cum.get("realizedPnlUsdt", 0.0))
+
+            exit_event = {
+                "tsUtc": deps.utc_now().isoformat(),
+                "event": "EXIT",
+                "side": "SELL",
+                "reason": "AI_FLATTEN",
+                "type": "PAPER_MARKET",
+                "symbol": symbol,
+                "qtyBtc": qty,
+                "price": effective_exit_price,
+                "quote": "USDT",
+                "notionalUsdt": gross,
+                "feeUsdt": fee,
+                "slippageBps": market_slip_bps,
+                "grossRealizedPnlUsdt": gross_realized,
+                "realizedPnlUsdt": realized,
+                "paper": True,
+            }
+            _attach_ai_event_fields(exit_event, ai_signal)
+            deps.append_trade(exit_event)
+            deps.log(f"AI_FLATTEN decision={ai_signal.get('decisionId')} price={price:.2f} pnl={realized:.2f}")
+
+    # IMPORTANT: do NOT auto-reinitialize the grid on tiny ATR/spacing drift.
+    # That was causing repeated re-buys and corrupt cost basis / unrealized PnL.
+    grid_plan = _compute_grid_plan(
+        state,
+        ai_signal,
+        ai_live,
+        grid_mode=grid_mode,
+        atr=atr,
+        price=price,
+    )
+    spacing_pct = grid_plan["spacing_pct"]
+    levels = grid_plan["levels"]
+    max_expo = grid_plan["max_expo"]
+
+    if ai_pause_new_buys and (grid is None or not grid.active):
+        deps.write_status(_status_payload(
+            state=state,
+            symbol=symbol,
+            interval=interval,
+            price=price,
+            paper=paper,
+            position_payload=_skip_position_payload(paper, grid),
+            stats_payload=_status_stats_payload(
+                stats=stats,
+                trend_strength=trend_strength,
+                grid_payload=_grid_telemetry(
+                    state=state,
+                    ai_signal=ai_signal,
+                    effective_mode=grid_mode,
+                    spacing_pct=spacing_pct,
+                    levels=levels,
+                    open_orders=len(grid.orders) if grid else 0,
+                    skipped=True,
+                    skipReason="ai_grid_disallowed",
+                ),
+                ai_signal=ai_signal,
+            ),
+            last_event="AI_SKIP",
+        ))
+        deps.sleep(1)
+        return _result("AI_SKIP")
+
+    # initialize grid only when none/inactive
+    if grid is None or (not grid.active):
+        # reserve capital
+        reserve_usdt = paper.equity(price) * max_expo
+        reserve_usdt = min(reserve_usdt, paper.usdt)
+
+        # Refuse to initialize a fresh grid if the spacing is too tight to overcome round-trip fees.
+        # This prevents churn in low-volatility conditions where gross grid capture is mostly consumed by fees.
+        spacing_below_fee_floor, min_edge_spacing = _spacing_fee_floor_decision(state, spacing_pct)
+        if spacing_below_fee_floor:
+            deps.write_status(_status_payload(
+                state=state,
+                symbol=symbol,
+                interval=interval,
+                price=price,
+                paper=paper,
+                position_payload=None,
+                stats_payload=_status_stats_payload(
+                    stats=stats,
+                    trend_strength=trend_strength,
+                    grid_payload=_grid_telemetry(
+                        state=state,
+                        ai_signal=ai_signal,
+                        effective_mode=grid_mode,
+                        spacing_pct=spacing_pct,
+                        levels=levels,
+                        open_orders=0,
+                        skipped=True,
+                        skipReason="spacing_below_fee_floor",
+                        requiredMinSpacingPct=min_edge_spacing,
+                    ),
+                    ai_signal=ai_signal,
+                ),
+                last_event="GRID_SKIP",
+            ))
+            deps.sleep(1)
+            return _result("GRID_SKIP")
+
+        # convert ~50% reserve to BTC so sells are possible
+        # IMPORTANT: this is a real buy (even in paper mode) and MUST be journaled,
+        # otherwise later accounting views can show sells without matching buys.
+        fee_rate = float(state.get("feeBps", 10)) / 10_000.0
+        market_slip_bps = float(state.get("paperMarketSlipBps", 12.0))
+        init_effective_price = price * (1 + (market_slip_bps / 10_000.0))
+        init_buy_gross = reserve_usdt * 0.5  # before fee
+        init_buy_total = init_buy_gross * (1 + fee_rate)
+        if init_buy_total > paper.usdt:
+            init_buy_gross = paper.usdt / (1 + fee_rate)
+            init_buy_total = init_buy_gross * (1 + fee_rate)
+
+        init_qty = init_buy_gross / init_effective_price if init_effective_price else 0.0
+        init_fee = init_buy_gross * fee_rate
+        paper.usdt -= init_buy_total
+        paper.btc += init_qty
+
+        grid = GridState(
+            anchor=price,
+            spacing_pct=spacing_pct,
+            levels=levels,
+            max_exposure_pct=max_expo,
+            reserved_usdt=reserve_usdt - init_buy_gross,
+            reserved_btc=init_qty,
+            cost_basis_usdt=init_buy_gross + init_fee,
+            orders=[],
+            active=True,
+            last_recenter_utc=deps.utc_now().isoformat(),
+        )
+
+        if init_qty > 0:
+            enter_event = {
+                "tsUtc": deps.utc_now().isoformat(),
+                "event": "ENTER",
+                "side": "BUY",
+                "reason": "GRID_INIT",
+                "type": "PAPER_MARKET",
+                "symbol": symbol,
+                "qtyBtc": init_qty,
+                "price": init_effective_price,
+                "quote": "USDT",
+                "notionalUsdt": init_buy_gross,
+                "feeUsdt": init_fee,
+                "slippageBps": market_slip_bps,
+                "paper": True,
+            }
+            _attach_ai_event_fields(enter_event, ai_signal)
+            deps.append_trade(enter_event)
+            cum = deps.read_cum()
+            cum["feesPaidUsdt"] = float(cum.get("feesPaidUsdt", 0.0)) + init_fee
+            deps.write_cum(cum)
+
+        # qty per level: spread remaining reserve across levels
+        total_levels = max(1, levels)
+        min_per_level = float(state.get("gridMinPerLevelUsdt", 20.0))
+        per_level_usdt = max(min_per_level, (reserve_usdt * 0.5) / total_levels)
+        qty_per = per_level_usdt / price if price else 0.0
+        grid.orders = _build_grid_orders(anchor=grid.anchor, spacing_pct=grid.spacing_pct, levels=grid.levels, qty_per_level=qty_per)
+
+        deps.log(f"GRID_INIT mode={grid_mode} spacing={spacing_pct:.4f} levels={levels} maxExpo={max_expo:.2f} anchor={price:.2f}")
+        grid_init_event = {
+            "tsUtc": deps.utc_now().isoformat(),
+            "event": "GRID_INIT",
+            "mode": grid_mode,
+            "spacingPct": spacing_pct,
+            "levels": levels,
+            "maxExposurePct": max_expo,
+            "anchor": price,
+            "paper": True,
+        }
+        _attach_ai_event_fields(grid_init_event, ai_signal)
+        deps.append_trade(grid_init_event)
+
+    # Fill logic: if candle crosses order price.
+    fee_rate = float(state.get("feeBps", 10)) / 10_000.0
+    limit_slip_bps = float(state.get("paperLimitSlipBps", 3.0))
+
+    filled = _select_crossed_grid_orders(
+        grid.orders,
+        candle_lo=candle_lo,
+        candle_hi=candle_hi,
+        price=price,
+        paper=paper,
+        ai_pause_new_buys=ai_pause_new_buys,
+        fee_rate=fee_rate,
+    )
+
+    for o in filled:
+        if stats.trades >= int(state.get("maxTradesPerDay", 200)):
+            break
+
+        # remove order
+        try:
+            grid.orders.remove(o)
+        except ValueError:
+            continue
+
+        # fill at order price
+        fee_bps = float(state.get("feeBps", 10))
+        ev = _fill_order_paper(paper, grid, o, fill_price=o.price, fee_bps=fee_bps, slip_bps=limit_slip_bps)
+        if ev is None:
+            # Could not fill (insufficient balance / zero qty). Keep order on the book.
+            grid.orders.append(o)
+            continue
+        ev["symbol"] = symbol
+        _attach_ai_event_fields(ev, ai_signal)
+        deps.append_trade(ev)
+
+        cum = deps.read_cum()
+        cum["feesPaidUsdt"] = float(cum.get("feesPaidUsdt", 0.0)) + float(ev.get("feeUsdt") or 0.0)
+        if ev.get("event") == "EXIT":
+            pnl = float(ev.get("realizedPnlUsdt") or 0.0)
+            gross_pnl = float(ev.get("grossRealizedPnlUsdt") or (pnl + float(ev.get("feeUsdt") or 0.0)))
+            cum["trades"] = int(cum.get("trades", 0)) + 1
+            cum["grossRealizedPnlUsdt"] = float(cum.get("grossRealizedPnlUsdt", 0.0)) + gross_pnl
+            stats.trades += 1
+            if pnl >= 0:
+                cum["wins"] = int(cum.get("wins", 0)) + 1
+            else:
+                cum["losses"] = int(cum.get("losses", 0)) + 1
+        deps.write_cum(cum)
+        stats.pnl_usdt = float(cum.get("realizedPnlUsdt", 0.0))
+
+        # place opposite order one level away
+        if o.side == "BUY":
+            new_px = o.price * (1 + grid.spacing_pct)
+            grid.orders.append(GridOrder(side="SELL", price=new_px, qty_btc=o.qty_btc))
+        else:
+            if not (ai_pause_new_buys or ai_sells_only):
+                new_px = o.price * (1 - grid.spacing_pct)
+                grid.orders.append(GridOrder(side="BUY", price=new_px, qty_btc=o.qty_btc))
+
+    # Update status every tick
+    event_rows = deps.load_trade_events()
+    entries_count = sum(1 for ev in event_rows if ev.get("event") == "ENTER")
+    exits_count = sum(1 for ev in event_rows if ev.get("event") == "EXIT")
+    has_open_position = paper.btc > 0
+
+    status_payload = _status_payload(
+        state=state,
+        symbol=symbol,
+        interval=interval,
+        price=price,
+        paper=paper,
+        position_payload=_position_payload(paper, grid, price),
+        stats_payload=_status_stats_payload(
+            stats=stats,
+            entries_count=entries_count,
+            exits_count=exits_count,
+            has_open_position=has_open_position,
+            trend_strength=trend_strength,
+            grid_payload=_grid_telemetry(
+                state=state,
+                ai_signal=ai_signal,
+                effective_mode=grid_mode,
+                spacing_pct=grid.spacing_pct if grid else None,
+                levels=grid.levels if grid else None,
+                open_orders=len(grid.orders) if grid else 0,
+            ),
+            ai_signal=ai_signal,
+        ),
+        last_event="TICK",
+    )
+    deps.write_status(status_payload)
+
+    runtime_payload = _runtime_payload(
+        engine_pid=engine_pid,
+        paper=paper,
+        stats=stats,
+        entries_count=entries_count,
+        exits_count=exits_count,
+        has_open_position=has_open_position,
+        market_payload=_build_runtime_market_payload(
+            kl,
+            close,
+            price=price,
+            candle_hi=candle_hi,
+            candle_lo=candle_lo,
+        ),
+        grid=grid,
+        ai_signal=ai_signal,
+    )
+    deps.maybe_write_runtime_state(runtime_snapshot_gate, runtime_payload)
+
+    now_monotonic = deps.monotonic()
+    if _should_emit_heartbeat_log(last_heartbeat_log_monotonic, HEARTBEAT_LOG_SECONDS, now_monotonic=now_monotonic):
+        deps.log(f"HEARTBEAT price={price:.2f} equity={paper.equity(price):.4f} orders={len(grid.orders) if grid else 0}")
+        last_heartbeat_log_monotonic = now_monotonic
+    deps.sleep(1)
+    return _result("TICK")
+
+
 def main():
     engine_pid, is_fresh_start = _acquire_engine_lock()
     base_url = os.getenv("BINANCE_BASE_URL", "https://api.binance.com")
@@ -1315,6 +1996,7 @@ def main():
     _client = BinanceSpotREST(base_url=base_url, api_key=api_key, api_secret=api_secret)
     # Market-data client (prod by default)
     md = BinanceSpotREST(base_url=md_url, api_key=api_key, api_secret=api_secret)
+    tick_deps = _engine_tick_deps(md)
 
     runtime_state = _read_runtime_state()
     runtime_snapshot_gate = _SnapshotChangeGate(
@@ -1343,7 +2025,6 @@ def main():
     stats = bootstrap.stats
     cum = bootstrap.cumulative
     grid = bootstrap.grid
-    has_open_position = bootstrap.has_open_position
 
     if bootstrap.changed_cumulative:
         _write_cum(cum)
@@ -1358,613 +2039,24 @@ def main():
 
     while True:
         state = _read_json(STATE_PATH)
-
-        now = _utc_now()
-
-        kl = md.klines(symbol=symbol, interval=interval, limit=210)
-        market = _market_indicators_from_klines(kl)
-        close = market["close"]
-        high = market["high"]  # noqa: F841
-        low = market["low"]  # noqa: F841
-        price = market["price"]
-        candle_hi = market["candle_hi"]
-        candle_lo = market["candle_lo"]
-        atr = market["atr"]
-        ema20 = market["ema20"]  # noqa: F841
-        ema50 = market["ema50"]  # noqa: F841
-        trend_strength = market["trend_strength"]
-
-        eq = paper.equity(price)
-        stats = _roll_stats_if_new_day(stats, now, eq)
-        stats = _update_equity_drawdown(stats, eq)
-
-        # daily stop
-        daily_stop_hit, daily_loss_pct = _daily_stop_decision(
-            stats,
-            eq,
-            float(state.get("maxDailyLossPct", 0.10)),
-        )
-        if daily_stop_hit:
-            _log(f"DAILY_STOP hit daily_loss_pct={daily_loss_pct:.4f} >= {state.get('maxDailyLossPct')} -> pausing")
-            state["paused"] = True
-            _write_json(STATE_PATH, state)
-            time.sleep(1)
-            continue
-
-        ai_signal = _read_ai_decision_for_engine(state)
-        ai_live = _ai_controls_active(ai_signal)
-        ai_pause_new_buys = ai_live and (ai_signal.get("pauseNewBuys") or not ai_signal.get("gridAllowed", True))
-        ai_sells_only = ai_live and (ai_signal.get("allowSellsOnly") or ai_signal.get("riskAction") in {"sells_only", "flatten"})
-        try:
-            grid_mode = _resolve_grid_mode(state, ai_signal, ai_live)
-        except ValueError as exc:
-            _log(f"GRID_CONFIG_INVALID {exc}")
-            event_rows = _load_trade_events()
-            entries_count = sum(1 for ev in event_rows if ev.get("event") == "ENTER")
-            exits_count = sum(1 for ev in event_rows if ev.get("event") == "EXIT")
-            has_open_position = paper.btc > 0
-            cum = _read_cum()
-            _write_status(_status_payload(
-                state=state,
-                symbol=symbol,
-                interval=interval,
-                price=price,
-                paper=paper,
-                position_payload=_position_payload(paper, grid, price),
-                stats_payload=_status_stats_payload(
-                    stats=stats,
-                    cum=cum,
-                    entries_count=entries_count,
-                    exits_count=exits_count,
-                    has_open_position=has_open_position,
-                    trend_strength=trend_strength,
-                    grid_payload=_grid_telemetry(
-                        state=state,
-                        ai_signal=ai_signal,
-                        effective_mode=None,
-                        spacing_pct=grid.spacing_pct if grid else None,
-                        levels=grid.levels if grid else None,
-                        open_orders=len(grid.orders) if grid else 0,
-                        skipped=True,
-                        skipReason="unsupported_grid_mode",
-                        error=str(exc),
-                    ),
-                    ai_signal=ai_signal,
-                ),
-                last_event="GRID_CONFIG_INVALID",
-            ))
-            time.sleep(1)
-            continue
-
-        inactive_reason = _inactive_reason(state, stats, now)
-
-        # Keep dashboard status fresh while inactive; runtime snapshots are gated below.
-        if inactive_reason:
-            event_rows = _load_trade_events()
-            entries_count = sum(1 for ev in event_rows if ev.get("event") == "ENTER")
-            exits_count = sum(1 for ev in event_rows if ev.get("event") == "EXIT")
-            has_open_position = paper.btc > 0
-            cum = _read_cum()
-            status_payload = _status_payload(
-                state=state,
-                symbol=symbol,
-                interval=interval,
-                price=price,
-                paper=paper,
-                position_payload=_position_payload(paper, grid, price),
-                stats_payload=_status_stats_payload(
-                    stats=stats,
-                    cum=cum,
-                    entries_count=entries_count,
-                    exits_count=exits_count,
-                    has_open_position=has_open_position,
-                    trend_strength=trend_strength,
-                    include_cooldown=True,
-                    grid_payload=_grid_telemetry(
-                        state=state,
-                        ai_signal=ai_signal,
-                        effective_mode=grid_mode,
-                        spacing_pct=grid.spacing_pct if grid else None,
-                        levels=grid.levels if grid else None,
-                        open_orders=len(grid.orders) if grid else 0,
-                        skipped=True,
-                        skipReason=inactive_reason,
-                    ),
-                    ai_signal=ai_signal,
-                ),
-                last_event="PAUSED" if inactive_reason == "paused" else "COOLDOWN",
-            )
-            _write_status(status_payload)
-            runtime_payload = _runtime_payload(
-                engine_pid=os.getpid(),
-                paper=paper,
-                stats=stats,
-                entries_count=entries_count,
-                exits_count=exits_count,
-                has_open_position=has_open_position,
-                market_payload=_build_runtime_market_payload(
-                    kl,
-                    close,
-                    price=price,
-                    candle_hi=candle_hi,
-                    candle_lo=candle_lo,
-                ),
-                grid=grid,
-                ai_signal=ai_signal,
-                cum=cum,
-            )
-            _maybe_write_runtime_state(runtime_snapshot_gate, runtime_payload)
-            time.sleep(1)
-            continue
-
-        # Trailing stop (ATR-based): trail up, never down, then exit via stop loss.
-        trail_mult = float(state.get("gridTrailAtrMult", 2.0))
-        trail_active = bool(state.get("gridTrailActive", True))
-
-        if trail_active and grid and paper.btc > 0 and grid.cost_basis_usdt > 0:
-            avg_cost = grid.cost_basis_usdt / paper.btc if paper.btc else 0.0
-            candidate_stop = price - trail_mult * atr
-            market_slip_bps = float(state.get("paperMarketSlipBps", 12.0))
-
-            # Arm trailing stop only when breakout risk is elevated OR we have a meaningful cushion.
-            arm_trend = float(state.get("gridTrailArmTrendStrength", 0.004))
-            arm_after_atr = float(state.get("gridTrailArmAfterAtr", 1.0))
-            armed = bool(grid.__dict__.get("trail_armed", False))
-            if (trend_strength >= arm_trend) or (avg_cost and price >= avg_cost + arm_after_atr * atr):
-                grid.__dict__["trail_armed"] = True
-                armed = True
-
-            # Only trail once armed AND at/above cost basis; never lower the stop.
-            if armed and avg_cost and price >= avg_cost:
-                prev = float(grid.__dict__.get("trail_stop", 0.0) or 0.0)
-                new_stop = max(prev, candidate_stop)
-                grid.__dict__["trail_stop"] = new_stop
-
-            trail_stop = float(grid.__dict__.get("trail_stop", 0.0) or 0.0)
-            if armed and trail_stop and price <= trail_stop:
-                fee_rate = float(state.get("feeBps", 10)) / 10_000.0
-                qty = paper.btc
-                effective_exit_price = price * (1 - (market_slip_bps / 10_000.0))
-                gross = qty * effective_exit_price
-                fee = gross * fee_rate
-                proceeds = gross - fee
-                gross_realized = gross - grid.cost_basis_usdt
-                realized = proceeds - grid.cost_basis_usdt
-
-                # Guardrail: avoid exits that look green gross but end red net after fees/slippage.
-                # Only allow a net-loss trail exit when breakout risk is genuinely strong enough to justify an escape.
-                min_profit_pct = float(state.get("gridTrailMinNetProfitPct", 0.0010))  # 0.10%
-                force_exit_trend = float(state.get("gridTrailForceExitTrendStrength", 0.02))
-                want_profit = (avg_cost > 0) and (price >= avg_cost * (1 + min_profit_pct))
-                gross_positive_net_negative = (gross_realized > 0.0 and realized < 0.0)
-                strong_escape = trend_strength >= force_exit_trend
-                if gross_positive_net_negative and not strong_escape:
-                    time.sleep(1)
-                    continue
-                if (realized < 0) and (not strong_escape) and (not want_profit):
-                    # Ignore the stop for now; let the grid work instead of paying fees repeatedly.
-                    time.sleep(1)
-                    continue
-
-                paper.btc = 0.0
-                paper.usdt += proceeds
-                grid.cost_basis_usdt = 0.0
-                grid.active = False
-                grid.orders = []
-
-                cum = _read_cum()
-                cum["trades"] = int(cum.get("trades", 0)) + 1
-                cum["feesPaidUsdt"] = float(cum.get("feesPaidUsdt", 0.0)) + fee
-                cum["grossRealizedPnlUsdt"] = float(cum.get("grossRealizedPnlUsdt", 0.0)) + gross_realized
-                stats.trades += 1
-                if realized >= 0:
-                    cum["wins"] = int(cum.get("wins", 0)) + 1
-                    stats.wins += 1
-                else:
-                    cum["losses"] = int(cum.get("losses", 0)) + 1
-                    stats.losses += 1
-                    mins = int(state.get("cooldownMinutesAfterLoss", 20))
-                    stats.cooldown_until = now + timedelta(minutes=mins)
-                _write_cum(cum)
-                stats.pnl_usdt = float(cum.get("realizedPnlUsdt", 0.0))
-
-                _log(f"GRID_TRAIL_STOP hit price={price:.2f} stop={trail_stop:.2f} pnl={realized:.2f}")
-                exit_event = {
-                    "tsUtc": _utc_now().isoformat(),
-                    "event": "EXIT",
-                    "side": "SELL",
-                    "reason": "TRAIL_STOP",
-                    "type": "PAPER_MARKET",
-                    "symbol": symbol,
-                    "qtyBtc": qty,
-                    "price": effective_exit_price,
-                    "quote": "USDT",
-                    "notionalUsdt": gross,
-                    "feeUsdt": fee,
-                    "slippageBps": market_slip_bps,
-                    "grossRealizedPnlUsdt": gross_realized,
-                    "realizedPnlUsdt": realized,
-                    "paper": True,
-                }
-                _attach_ai_event_fields(exit_event, ai_signal)
-                _append_trade(exit_event)
-
-                event_rows = _load_trade_events()
-                entries_count = sum(1 for ev in event_rows if ev.get("event") == "ENTER")
-                exits_count = sum(1 for ev in event_rows if ev.get("event") == "EXIT")
-                _write_status(_status_payload(
-                    state=state,
-                    symbol=symbol,
-                    interval=interval,
-                    price=price,
-                    paper=paper,
-                    position_payload=None,
-                    stats_payload=_status_stats_payload(
-                        stats=stats,
-                        cum=cum,
-                        entries_count=entries_count,
-                        exits_count=exits_count,
-                        has_open_position=False,
-                        trend_strength=trend_strength,
-                        grid_payload=_grid_telemetry(
-                            state=state,
-                            ai_signal=ai_signal,
-                            effective_mode=grid_mode,
-                            spacing_pct=grid.spacing_pct if grid else None,
-                            levels=grid.levels if grid else None,
-                            open_orders=0,
-                        ),
-                        ai_signal=ai_signal,
-                    ),
-                    last_event="EXIT",
-                ))
-                _write_runtime_state(_runtime_payload(
-                    engine_pid=os.getpid(),
-                    paper=paper,
-                    stats=stats,
-                    entries_count=entries_count,
-                    exits_count=exits_count,
-                    has_open_position=False,
-                    market_payload=_build_runtime_market_payload(
-                        kl,
-                        close,
-                        price=price,
-                        candle_hi=candle_hi,
-                        candle_lo=candle_lo,
-                    ),
-                    grid=grid,
-                    ai_signal=ai_signal,
-                    cum=cum,
-                ))
-
-                time.sleep(1)
-                continue
-
-        if ai_live and ai_signal.get("flattenRecommended") and paper.btc > 0 and grid and grid.cost_basis_usdt > 0:
-            min_flatten_conf = max(float(state.get("aiMinConfidence", 0.55) or 0.55), 0.75)
-            if float(ai_signal.get("confidence", 0.0) or 0.0) >= min_flatten_conf:
-                fee_rate = float(state.get("feeBps", 10)) / 10_000.0
-                market_slip_bps = float(state.get("paperMarketSlipBps", 12.0))
-                qty = paper.btc
-                effective_exit_price = price * (1 - (market_slip_bps / 10_000.0))
-                gross = qty * effective_exit_price
-                fee = gross * fee_rate
-                proceeds = gross - fee
-                gross_realized = gross - grid.cost_basis_usdt
-                realized = proceeds - grid.cost_basis_usdt
-
-                paper.btc = 0.0
-                paper.usdt += proceeds
-                grid.cost_basis_usdt = 0.0
-                grid.active = False
-                grid.orders = []
-
-                cum = _read_cum()
-                cum["trades"] = int(cum.get("trades", 0)) + 1
-                cum["feesPaidUsdt"] = float(cum.get("feesPaidUsdt", 0.0)) + fee
-                cum["grossRealizedPnlUsdt"] = float(cum.get("grossRealizedPnlUsdt", 0.0)) + gross_realized
-                stats.trades += 1
-                if realized >= 0:
-                    cum["wins"] = int(cum.get("wins", 0)) + 1
-                    stats.wins += 1
-                else:
-                    cum["losses"] = int(cum.get("losses", 0)) + 1
-                    stats.losses += 1
-                    mins = int(state.get("cooldownMinutesAfterLoss", 20))
-                    stats.cooldown_until = now + timedelta(minutes=mins)
-                _write_cum(cum)
-                stats.pnl_usdt = float(cum.get("realizedPnlUsdt", 0.0))
-
-                exit_event = {
-                    "tsUtc": _utc_now().isoformat(),
-                    "event": "EXIT",
-                    "side": "SELL",
-                    "reason": "AI_FLATTEN",
-                    "type": "PAPER_MARKET",
-                    "symbol": symbol,
-                    "qtyBtc": qty,
-                    "price": effective_exit_price,
-                    "quote": "USDT",
-                    "notionalUsdt": gross,
-                    "feeUsdt": fee,
-                    "slippageBps": market_slip_bps,
-                    "grossRealizedPnlUsdt": gross_realized,
-                    "realizedPnlUsdt": realized,
-                    "paper": True,
-                }
-                _attach_ai_event_fields(exit_event, ai_signal)
-                _append_trade(exit_event)
-                _log(f"AI_FLATTEN decision={ai_signal.get('decisionId')} price={price:.2f} pnl={realized:.2f}")
-
-        # IMPORTANT: do NOT auto-reinitialize the grid on tiny ATR/spacing drift.
-        # That was causing repeated re-buys and corrupt cost basis / unrealized PnL.
-        grid_plan = _compute_grid_plan(
-            state,
-            ai_signal,
-            ai_live,
-            grid_mode=grid_mode,
-            atr=atr,
-            price=price,
-        )
-        spacing_pct = grid_plan["spacing_pct"]
-        levels = grid_plan["levels"]
-        max_expo = grid_plan["max_expo"]
-
-        if ai_pause_new_buys and (grid is None or not grid.active):
-            _write_status(_status_payload(
-                state=state,
-                symbol=symbol,
-                interval=interval,
-                price=price,
-                paper=paper,
-                position_payload=_skip_position_payload(paper, grid),
-                stats_payload=_status_stats_payload(
-                    stats=stats,
-                    trend_strength=trend_strength,
-                    grid_payload=_grid_telemetry(
-                        state=state,
-                        ai_signal=ai_signal,
-                        effective_mode=grid_mode,
-                        spacing_pct=spacing_pct,
-                        levels=levels,
-                        open_orders=len(grid.orders) if grid else 0,
-                        skipped=True,
-                        skipReason="ai_grid_disallowed",
-                    ),
-                    ai_signal=ai_signal,
-                ),
-                last_event="AI_SKIP",
-            ))
-            time.sleep(1)
-            continue
-
-        # initialize grid only when none/inactive
-        if grid is None or (not grid.active):
-            # reserve capital
-            reserve_usdt = paper.equity(price) * max_expo
-            reserve_usdt = min(reserve_usdt, paper.usdt)
-
-            # Refuse to initialize a fresh grid if the spacing is too tight to overcome round-trip fees.
-            # This prevents churn in low-volatility conditions where gross grid capture is mostly consumed by fees.
-            spacing_below_fee_floor, min_edge_spacing = _spacing_fee_floor_decision(state, spacing_pct)
-            if spacing_below_fee_floor:
-                _write_status(_status_payload(
-                    state=state,
-                    symbol=symbol,
-                    interval=interval,
-                    price=price,
-                    paper=paper,
-                    position_payload=None,
-                    stats_payload=_status_stats_payload(
-                        stats=stats,
-                        trend_strength=trend_strength,
-                        grid_payload=_grid_telemetry(
-                            state=state,
-                            ai_signal=ai_signal,
-                            effective_mode=grid_mode,
-                            spacing_pct=spacing_pct,
-                            levels=levels,
-                            open_orders=0,
-                            skipped=True,
-                            skipReason="spacing_below_fee_floor",
-                            requiredMinSpacingPct=min_edge_spacing,
-                        ),
-                        ai_signal=ai_signal,
-                    ),
-                    last_event="GRID_SKIP",
-                ))
-                time.sleep(1)
-                continue
-
-            # convert ~50% reserve to BTC so sells are possible
-            # IMPORTANT: this is a real buy (even in paper mode) and MUST be journaled,
-            # otherwise later accounting views can show sells without matching buys.
-            fee_rate = float(state.get("feeBps", 10)) / 10_000.0
-            market_slip_bps = float(state.get("paperMarketSlipBps", 12.0))
-            init_effective_price = price * (1 + (market_slip_bps / 10_000.0))
-            init_buy_gross = reserve_usdt * 0.5  # before fee
-            init_buy_total = init_buy_gross * (1 + fee_rate)
-            if init_buy_total > paper.usdt:
-                init_buy_gross = paper.usdt / (1 + fee_rate)
-                init_buy_total = init_buy_gross * (1 + fee_rate)
-
-            init_qty = init_buy_gross / init_effective_price if init_effective_price else 0.0
-            init_fee = init_buy_gross * fee_rate
-            paper.usdt -= init_buy_total
-            paper.btc += init_qty
-
-            grid = GridState(
-                anchor=price,
-                spacing_pct=spacing_pct,
-                levels=levels,
-                max_exposure_pct=max_expo,
-                reserved_usdt=reserve_usdt - init_buy_gross,
-                reserved_btc=init_qty,
-                cost_basis_usdt=init_buy_gross + init_fee,
-                orders=[],
-                active=True,
-                last_recenter_utc=_utc_now().isoformat(),
-            )
-
-            if init_qty > 0:
-                enter_event = {
-                    "tsUtc": _utc_now().isoformat(),
-                    "event": "ENTER",
-                    "side": "BUY",
-                    "reason": "GRID_INIT",
-                    "type": "PAPER_MARKET",
-                    "symbol": symbol,
-                    "qtyBtc": init_qty,
-                    "price": init_effective_price,
-                    "quote": "USDT",
-                    "notionalUsdt": init_buy_gross,
-                    "feeUsdt": init_fee,
-                    "slippageBps": market_slip_bps,
-                    "paper": True,
-                }
-                _attach_ai_event_fields(enter_event, ai_signal)
-                _append_trade(enter_event)
-                cum = _read_cum()
-                cum["feesPaidUsdt"] = float(cum.get("feesPaidUsdt", 0.0)) + init_fee
-                _write_cum(cum)
-
-            # qty per level: spread remaining reserve across levels
-            total_levels = max(1, levels)
-            min_per_level = float(state.get("gridMinPerLevelUsdt", 20.0))
-            per_level_usdt = max(min_per_level, (reserve_usdt * 0.5) / total_levels)
-            qty_per = per_level_usdt / price if price else 0.0
-            grid.orders = _build_grid_orders(anchor=grid.anchor, spacing_pct=grid.spacing_pct, levels=grid.levels, qty_per_level=qty_per)
-
-            _log(f"GRID_INIT mode={grid_mode} spacing={spacing_pct:.4f} levels={levels} maxExpo={max_expo:.2f} anchor={price:.2f}")
-            grid_init_event = {
-                "tsUtc": _utc_now().isoformat(),
-                "event": "GRID_INIT",
-                "mode": grid_mode,
-                "spacingPct": spacing_pct,
-                "levels": levels,
-                "maxExposurePct": max_expo,
-                "anchor": price,
-                "paper": True,
-            }
-            _attach_ai_event_fields(grid_init_event, ai_signal)
-            _append_trade(grid_init_event)
-
-        # Fill logic: if candle crosses order price.
-        fee_rate = float(state.get("feeBps", 10)) / 10_000.0
-        limit_slip_bps = float(state.get("paperLimitSlipBps", 3.0))
-
-        filled = _select_crossed_grid_orders(
-            grid.orders,
-            candle_lo=candle_lo,
-            candle_hi=candle_hi,
-            price=price,
-            paper=paper,
-            ai_pause_new_buys=ai_pause_new_buys,
-            fee_rate=fee_rate,
-        )
-
-        for o in filled:
-            if stats.trades >= int(state.get("maxTradesPerDay", 200)):
-                break
-
-            # remove order
-            try:
-                grid.orders.remove(o)
-            except ValueError:
-                continue
-
-            # fill at order price
-            fee_bps = float(state.get("feeBps", 10))
-            ev = _fill_order_paper(paper, grid, o, fill_price=o.price, fee_bps=fee_bps, slip_bps=limit_slip_bps)
-            if ev is None:
-                # Could not fill (insufficient balance / zero qty). Keep order on the book.
-                grid.orders.append(o)
-                continue
-            ev["symbol"] = symbol
-            _attach_ai_event_fields(ev, ai_signal)
-            _append_trade(ev)
-
-            cum = _read_cum()
-            cum["feesPaidUsdt"] = float(cum.get("feesPaidUsdt", 0.0)) + float(ev.get("feeUsdt") or 0.0)
-            if ev.get("event") == "EXIT":
-                pnl = float(ev.get("realizedPnlUsdt") or 0.0)
-                gross_pnl = float(ev.get("grossRealizedPnlUsdt") or (pnl + float(ev.get("feeUsdt") or 0.0)))
-                cum["trades"] = int(cum.get("trades", 0)) + 1
-                cum["grossRealizedPnlUsdt"] = float(cum.get("grossRealizedPnlUsdt", 0.0)) + gross_pnl
-                stats.trades += 1
-                if pnl >= 0:
-                    cum["wins"] = int(cum.get("wins", 0)) + 1
-                else:
-                    cum["losses"] = int(cum.get("losses", 0)) + 1
-            _write_cum(cum)
-            stats.pnl_usdt = float(cum.get("realizedPnlUsdt", 0.0))
-
-            # place opposite order one level away
-            if o.side == "BUY":
-                new_px = o.price * (1 + grid.spacing_pct)
-                grid.orders.append(GridOrder(side="SELL", price=new_px, qty_btc=o.qty_btc))
-            else:
-                if not (ai_pause_new_buys or ai_sells_only):
-                    new_px = o.price * (1 - grid.spacing_pct)
-                    grid.orders.append(GridOrder(side="BUY", price=new_px, qty_btc=o.qty_btc))
-
-        # Update status every tick
-        event_rows = _load_trade_events()
-        entries_count = sum(1 for ev in event_rows if ev.get("event") == "ENTER")
-        exits_count = sum(1 for ev in event_rows if ev.get("event") == "EXIT")
-        has_open_position = paper.btc > 0
-
-        status_payload = _status_payload(
+        result = _run_engine_tick(
             state=state,
-            symbol=symbol,
-            interval=interval,
-            price=price,
-            paper=paper,
-            position_payload=_position_payload(paper, grid, price),
-            stats_payload=_status_stats_payload(
-                stats=stats,
-                entries_count=entries_count,
-                exits_count=exits_count,
-                has_open_position=has_open_position,
-                trend_strength=trend_strength,
-                grid_payload=_grid_telemetry(
-                    state=state,
-                    ai_signal=ai_signal,
-                    effective_mode=grid_mode,
-                    spacing_pct=grid.spacing_pct if grid else None,
-                    levels=grid.levels if grid else None,
-                    open_orders=len(grid.orders) if grid else 0,
-                ),
-                ai_signal=ai_signal,
-            ),
-            last_event="TICK",
-        )
-        _write_status(status_payload)
-
-        runtime_payload = _runtime_payload(
-            engine_pid=os.getpid(),
             paper=paper,
             stats=stats,
-            entries_count=entries_count,
-            exits_count=exits_count,
-            has_open_position=has_open_position,
-            market_payload=_build_runtime_market_payload(
-                kl,
-                close,
-                price=price,
-                candle_hi=candle_hi,
-                candle_lo=candle_lo,
-            ),
             grid=grid,
-            ai_signal=ai_signal,
+            cum=cum,
+            symbol=symbol,
+            interval=interval,
+            runtime_snapshot_gate=runtime_snapshot_gate,
+            engine_pid=engine_pid,
+            last_heartbeat_log_monotonic=last_heartbeat_log_monotonic,
+            deps=tick_deps,
         )
-        _maybe_write_runtime_state(runtime_snapshot_gate, runtime_payload)
-
-        now_monotonic = time.monotonic()
-        if _should_emit_heartbeat_log(last_heartbeat_log_monotonic, HEARTBEAT_LOG_SECONDS, now_monotonic=now_monotonic):
-            _log(f"HEARTBEAT price={price:.2f} equity={paper.equity(price):.4f} orders={len(grid.orders) if grid else 0}")
-            last_heartbeat_log_monotonic = now_monotonic
-        time.sleep(1)
+        paper = result.paper
+        stats = result.stats
+        grid = result.grid
+        cum = result.cum
+        last_heartbeat_log_monotonic = result.last_heartbeat_log_monotonic
 
 
 if __name__ == "__main__":
