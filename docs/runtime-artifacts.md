@@ -98,8 +98,8 @@ Local environment files are private configuration:
 - `.env.*`
 
 `.env.example` is the tracked template and must contain placeholders only. Do
-not commit real Binance keys, Telegram tokens, dashboard tokens, local service
-URLs, account identifiers, or production configuration values.
+not commit real Binance keys, dashboard tokens, local service URLs, account
+identifiers, or production configuration values.
 
 ## Recommended Future Layout
 

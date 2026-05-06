@@ -662,15 +662,6 @@ def _attach_ai_event_fields(event: dict, ai_signal: dict) -> dict:
     return event
 
 
-def _tg_send(token: str, chat_id: int, text: str) -> None:
-    # Minimal Telegram send via HTTPS (no extra deps).
-    import requests
-
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
-    r = requests.post(url, json={"chat_id": chat_id, "text": text}, timeout=10)
-    r.raise_for_status()
-
-
 def _ema(values: list[float], period: int) -> float:
     if len(values) < period:
         raise ValueError("Not enough values for EMA")
@@ -1138,8 +1129,6 @@ def main():
     api_key = _required("BINANCE_API_KEY")
     api_secret = _required("BINANCE_API_SECRET")
 
-    tg_token = os.getenv("TELEGRAM_CONTROL_BOT_TOKEN")
-
     state = _read_json(STATE_PATH)
     symbol = state.get("symbol", os.getenv("BINANCE_SYMBOL", "BTCUSDT"))
     interval = state.get("interval", "15m")
@@ -1242,8 +1231,6 @@ def main():
             _log(f"DAILY_STOP hit daily_loss_pct={daily_loss_pct:.4f} >= {state.get('maxDailyLossPct')} -> pausing")
             state["paused"] = True
             _write_json(STATE_PATH, state)
-            if tg_token and state.get("adminChatId"):
-                _tg_send(tg_token, int(state["adminChatId"]), f"GRID paused: max daily loss reached ({daily_loss_pct*100:.2f}%).")
             time.sleep(1)
             continue
 
@@ -1652,7 +1639,7 @@ def main():
 
             # convert ~50% reserve to BTC so sells are possible
             # IMPORTANT: this is a real buy (even in paper mode) and MUST be journaled,
-            # otherwise Telegram will show "sold more BTC than bought".
+            # otherwise later accounting views can show sells without matching buys.
             fee_rate = float(state.get("feeBps", 10)) / 10_000.0
             market_slip_bps = float(state.get("paperMarketSlipBps", 12.0))
             init_effective_price = price * (1 + (market_slip_bps / 10_000.0))

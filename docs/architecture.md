@@ -7,7 +7,7 @@ is descriptive, not prescriptive runtime behavior.
 
 The repository is currently organized as a set of root-level Python modules
 that share local runtime files, SQLite persistence, dashboard endpoints,
-optional Telegram notifications, and optional AI review flows.
+and optional AI review flows.
 
 The main operating shape is:
 
@@ -16,8 +16,6 @@ The main operating shape is:
 - JSON and JSONL files remain compatibility mirrors for legacy/runtime flows.
 - `dashboard_server.py`, `dashboard_routes.py`, and dashboard static assets
   expose monitoring and selected control surfaces.
-- Retained engine helpers can send optional Telegram
-  notifications through direct HTTPS calls.
 - `ai_sidecar.py` produces optional AI decisions and review context.
 - Wrapper scripts and `dashboard_orchestrator.py` start, stop, and inspect
   local services.
@@ -128,20 +126,11 @@ AI output must remain advisory unless existing engine configuration explicitly
 uses it. Refactors should not silently change AI enablement, stale-signal
 handling, model selection, prompt semantics, or engine consumption behavior.
 
-## Optional Telegram Notification Responsibilities
+## External Messaging Runtime
 
-Current Telegram behavior is limited to retained notification helpers in
-`engine.py`. These helpers are responsible for:
-
-- Sending selected runtime notifications when `TELEGRAM_CONTROL_BOT_TOKEN` and
-  local runtime state provide a destination chat.
-- Avoiding the `python-telegram-bot` runtime dependency.
-- Remaining unchanged until notification ownership is decided in a later branch.
-
-The deprecated advisor entry point has been removed. Old `advisor.log` files may
-still exist in local workspaces and should remain ignored as runtime artifacts.
-
-Telegram tokens are sensitive local configuration and belong outside Git.
+External chat-bot control and notification runtimes are not part of the
+supported application. Operational visibility and controls are owned by the
+dashboard, logs, and local runtime state.
 
 ## Runtime Artifacts and Where They Should Live
 

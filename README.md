@@ -3,8 +3,8 @@
 ## Project overview
 
 `tradebot` is a Python trading-bot workspace for Binance Spot testnet-style
-workflows, local SQLite-backed runtime storage, dashboard monitoring, optional
-Telegram notifications, and optional local AI review.
+workflows, local SQLite-backed runtime storage, dashboard monitoring, and
+optional local AI review.
 
 This repository is organized for cautious modernization. The current focus is
 making setup, safety, testing, and runtime boundaries clear before larger
@@ -17,10 +17,10 @@ risk, but they do not prove that live trading is safe. Live operation can be
 affected by market volatility, exchange latency, partial fills, network
 failures, account permissions, API errors, and operator mistakes.
 
-Never commit real secrets. Keep Binance API keys, Telegram bot tokens,
-dashboard tokens, `.env` files, databases, logs, JSONL trade logs, and runtime
-state files out of Git. If real secrets were committed or shared in a ZIP,
-rotate them immediately. See [SECURITY.md](SECURITY.md).
+Never commit real secrets. Keep Binance API keys, dashboard tokens, `.env`
+files, databases, logs, JSONL trade logs, and runtime state files out of Git. If
+real secrets were committed or shared in a ZIP, rotate them immediately. See
+[SECURITY.md](SECURITY.md).
 
 ## Architecture overview
 
@@ -55,13 +55,6 @@ dashboard is not localhost-only.
 using an OpenAI-compatible local endpoint. AI output is advisory unless existing
 engine configuration explicitly consumes it.
 
-### Optional Telegram notifications
-
-Retained engine notification helpers can send Telegram messages
-when `TELEGRAM_CONTROL_BOT_TOKEN` and local runtime state provide a
-destination chat. The deprecated Telegram control bot and advisor entry point
-have been removed; broader notification cleanup is deferred to a later branch.
-
 ## Requirements
 
 - Python 3.11 is recommended for CI parity.
@@ -69,8 +62,7 @@ have been removed; broader notification cleanup is deferred to a later branch.
 - Git.
 - Network access for dependency installation.
 - Optional local services depending on what you run: Binance testnet access,
-  Telegram notification delivery, dashboard access, and an
-  Ollama/OpenAI-compatible local AI endpoint.
+  dashboard access, and an Ollama/OpenAI-compatible local AI endpoint.
 
 ## Setup
 
@@ -109,7 +101,6 @@ blank.
 Review the sections in `.env.example` before running services:
 
 - Binance/testnet configuration.
-- Optional Telegram notification configuration.
 - Persistence/runtime storage.
 - Dashboard configuration.
 - Local AI sidecar configuration.

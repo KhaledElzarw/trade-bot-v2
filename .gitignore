@@ -35,6 +35,5 @@ state_trend.json
 trades.jsonl
 trades_trend.jsonl
 advisor.log
-control.nohup.out
 engine.log
 engine_trend.log

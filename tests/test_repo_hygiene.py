@@ -7,7 +7,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 FORBIDDEN_EXACT_PATHS = {
     ".env",
     ".env.grid",
-    ".env.telegram",
+    ".env.local",
     ".env.trend",
     "dashboard_intelligence.json",
 }

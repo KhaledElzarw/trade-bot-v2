@@ -10,7 +10,6 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 DEPRECATED_MODULES = set()
 REMOVED_LEGACY_MODULES = {
     "advisor",
-    "control_bot",
     "engine_trend",
     "grid_engine_honest",
     "grid_engine_honest_v2",

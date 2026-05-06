@@ -16,7 +16,6 @@ def test_orchestrator_services_map_contains_only_runtime_wrappers():
 
     removed_or_deprecated = (
         "advisor",
-        "control_bot",
         "engine_trend",
         "grid_engine_honest",
         "grid_engine_honest_v2",

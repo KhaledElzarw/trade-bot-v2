@@ -1,8 +1,8 @@
 # Security Policy
 
-This repository may be used with exchange credentials, Telegram bot tokens,
-dashboard access controls, local databases, logs, and runtime state files. Treat
-all of those materials as sensitive. Real secrets must never be committed.
+This repository may be used with exchange credentials, dashboard access
+controls, local databases, logs, and runtime state files. Treat all of those
+materials as sensitive. Real secrets must never be committed.
 
 ## Security Policy
 
@@ -41,14 +41,6 @@ keys with only the permissions required by the running mode. Do not grant
 withdrawal permissions to bot keys. Rotate keys immediately if they were
 committed, copied into a public location, exposed in logs, or shared in a ZIP.
 
-## Telegram Token Safety
-
-Telegram bot tokens allow control of the configured bot. Keep tokens in local
-environment files or deployment secret storage only. Do not place tokens in
-screenshots, logs, README examples, test fixtures, or support messages. Rotate
-the bot token if it was committed, exposed, or shared outside the trusted
-operating environment.
-
 ## Dashboard Exposure Warning
 
 The dashboard should not be exposed publicly without authentication/token
@@ -74,7 +66,6 @@ contain the value.
 
 - Binance API keys rotated and old keys revoked.
 - Binance key permissions reviewed and withdrawal access disabled.
-- Telegram bot token rotated if exposed.
 - Dashboard token or password rotated if exposed.
 - Deployment secrets updated.
 - Local `.env` files updated.

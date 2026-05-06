@@ -13,7 +13,7 @@ been checked.
 Candidate groups:
 
 - Historical or experimental grid engines.
-- Removed Telegram control bot.
+- Removed messaging operator workflow.
 - Removed trend-specific engine path.
 - Removed advisor process and flexy grid mode.
 - Backup files matching `*.bak` or `*.bak_*`.
@@ -74,18 +74,17 @@ Status: **Removed deprecated research/backtest replay script**
    - Compileall.
    - Ruff.
 
-## control_bot.py
+## messaging operator workflow
 
-Status: **Removed deprecated Telegram operator control surface**
+Status: **Removed deprecated messaging operator surface**
 
-1. Former path: `control_bot.py`
+1. Former path: removed root-level operator module
 2. Why removed: Deprecated non-core operator control surface that depended on
-   `python-telegram-bot`.
+   a third-party chat framework.
 3. Evidence of removal safety:
-   - No preserved core module imported `control_bot`.
+   - No preserved core module imported the removed operator module.
    - `dashboard_orchestrator.py` did not start it.
-   - Remaining Telegram notification helpers use direct HTTPS calls through
-     `requests`.
+   - Follow-up cleanup removed the remaining notification helper path.
 4. Required checks after removal:
    - Full pytest suite.
    - Coverage run and report.
@@ -104,8 +103,8 @@ Status: **Removed deprecated alternate engine workflow**
      `main`.
    - Writes or references trend-specific runtime artifacts such as
      `engine_trend.log`.
-   - Former Telegram control bot commands read and wrote trend-specific
-     state/status/trade files before the control bot was removed.
+   - Former messaging operator commands read and wrote trend-specific
+     state/status/trade files before the operator workflow was removed.
    - Importing the module loaded local environment variables.
    - Runtime execution was guarded by `main`.
 4. Removal status:

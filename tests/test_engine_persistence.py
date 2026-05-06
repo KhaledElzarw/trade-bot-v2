@@ -1,7 +1,5 @@
 import json
-import sys
 from datetime import datetime, timezone
-from types import SimpleNamespace
 
 import pytest
 
@@ -166,30 +164,6 @@ def test_acquire_engine_lock_raises_for_different_live_owner(monkeypatch):
         engine._acquire_engine_lock()
 
     assert writes == []
-
-
-def test_tg_send_posts_message_without_real_http(monkeypatch):
-    calls = []
-
-    class Response:
-        def raise_for_status(self):
-            calls.append(("raise_for_status",))
-
-    def fake_post(url, **kwargs):
-        calls.append((url, kwargs))
-        return Response()
-
-    monkeypatch.setitem(sys.modules, "requests", SimpleNamespace(post=fake_post))
-
-    engine._tg_send("token-123", 456, "hello")
-
-    assert calls == [
-        (
-            "https://api.telegram.org/bottoken-123/sendMessage",
-            {"json": {"chat_id": 456, "text": "hello"}, "timeout": 10},
-        ),
-        ("raise_for_status",),
-    ]
 
 
 def test_log_writes_timestamped_line_to_patched_path(tmp_path, monkeypatch, capsys):

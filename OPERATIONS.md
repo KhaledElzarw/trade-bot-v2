@@ -8,8 +8,8 @@ logic.
 
 Trading automation is high risk. Start with smoke tests and paper/testnet
 operation before considering any live-risk workflow. Do not treat a successful
-testnet, paper, dry-run, dashboard, Telegram notification, or AI sidecar
-workflow as proof that live trading is safe.
+testnet, paper, dry-run, dashboard, or AI sidecar workflow as proof that live
+trading is safe.
 
 Core operating rules:
 
@@ -116,14 +116,6 @@ python ai_playground.py --write-signal
 
 Run the write-signal command only when you intentionally want to update local AI
 signal runtime state.
-
-### Optional Telegram notifications
-
-Retained engine notification helpers can send Telegram messages
-when `TELEGRAM_CONTROL_BOT_TOKEN` and local runtime state provide a
-destination chat. The deprecated Telegram control bot service has been removed.
-Do not commit Telegram tokens, screenshots that reveal tokens, or exported chat
-logs with operational secrets.
 
 ## Startup commands
 
@@ -278,7 +270,7 @@ in a ZIP, or exposed outside the trusted operating environment:
 3. Update local `.env` files and deployment secret storage.
 4. Restart affected services.
 5. Verify status without printing secret values.
-6. Review recent exchange, Telegram, and dashboard activity for unexpected use.
+6. Review recent exchange and dashboard activity for unexpected use.
 
 ## Troubleshooting failed tests
 
@@ -315,14 +307,6 @@ or paste file contents when the path may contain secrets or runtime state.
 - Check `curl -s http://localhost:8844/api/dashboard`.
 - Review dashboard logs locally without printing secret values.
 
-## Troubleshooting Telegram notifications
-
-- Confirm the local environment contains `TELEGRAM_CONTROL_BOT_TOKEN` only if
-  notification delivery is expected.
-- Confirm network access to Telegram.
-- Review engine logs locally without printing token values.
-- Rotate the bot token if it may have been exposed.
-
 ## Troubleshooting AI sidecar
 
 - Confirm the local AI endpoint is reachable.
@@ -337,7 +321,7 @@ or paste file contents when the path may contain secrets or runtime state.
 Never commit:
 
 - Real secrets or local `.env` files.
-- Binance API keys or Telegram bot tokens.
+- Binance API keys.
 - Dashboard tokens.
 - SQLite databases and WAL/SHM files.
 - JSON/JSONL runtime state and trade logs.
