@@ -765,6 +765,16 @@ def _roll_stats_if_new_day(stats: Stats, now: datetime, equity: float) -> Stats:
     return Stats(day=day, peak_equity=equity)
 
 
+def _update_equity_drawdown(stats: Stats, equity: float) -> Stats:
+    if stats.peak_equity <= 0:
+        stats.peak_equity = equity
+    if equity > stats.peak_equity:
+        stats.peak_equity = equity
+    dd = (stats.peak_equity - equity) / stats.peak_equity if stats.peak_equity > 0 else 0
+    stats.max_drawdown_pct = max(stats.max_drawdown_pct, dd)
+    return stats
+
+
 def _grid_mode_error(mode: object) -> ValueError:
     allowed = ", ".join(sorted(SUPPORTED_GRID_MODES))
     return ValueError(f"unsupported gridMode {mode!r}; gridMode must be one of: {allowed}")
@@ -1247,12 +1257,7 @@ def main():
 
         eq = paper.equity(price)
         stats = _roll_stats_if_new_day(stats, now, eq)
-        if stats.peak_equity <= 0:
-            stats.peak_equity = eq
-        if eq > stats.peak_equity:
-            stats.peak_equity = eq
-        dd = (stats.peak_equity - eq) / stats.peak_equity if stats.peak_equity > 0 else 0
-        stats.max_drawdown_pct = max(stats.max_drawdown_pct, dd)
+        stats = _update_equity_drawdown(stats, eq)
 
         # daily stop
         daily_loss_pct = max(0.0, (stats.peak_equity - eq) / stats.peak_equity) if stats.peak_equity > 0 else 0.0

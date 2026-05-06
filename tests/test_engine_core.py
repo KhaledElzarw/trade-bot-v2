@@ -401,6 +401,46 @@ def test_roll_stats_if_new_day_keeps_same_day_stats():
     assert rolled is stats
 
 
+def test_update_equity_drawdown_initializes_peak_when_missing():
+    stats = engine.Stats(day="2026-05-06", peak_equity=0.0)
+
+    updated = engine._update_equity_drawdown(stats, equity=1000.0)
+
+    assert updated is stats
+    assert stats.peak_equity == pytest.approx(1000.0)
+    assert stats.max_drawdown_pct == pytest.approx(0.0)
+
+
+def test_update_equity_drawdown_raises_peak_on_new_high():
+    stats = engine.Stats(day="2026-05-06", peak_equity=900.0)
+
+    updated = engine._update_equity_drawdown(stats, equity=1000.0)
+
+    assert updated is stats
+    assert stats.peak_equity == pytest.approx(1000.0)
+    assert stats.max_drawdown_pct == pytest.approx(0.0)
+
+
+def test_update_equity_drawdown_records_larger_drawdown():
+    stats = engine.Stats(day="2026-05-06", peak_equity=1000.0, max_drawdown_pct=0.05)
+
+    updated = engine._update_equity_drawdown(stats, equity=800.0)
+
+    assert updated is stats
+    assert stats.peak_equity == pytest.approx(1000.0)
+    assert stats.max_drawdown_pct == pytest.approx(0.20)
+
+
+def test_update_equity_drawdown_does_not_reduce_existing_max_drawdown():
+    stats = engine.Stats(day="2026-05-06", peak_equity=1000.0, max_drawdown_pct=0.20)
+
+    updated = engine._update_equity_drawdown(stats, equity=950.0)
+
+    assert updated is stats
+    assert stats.peak_equity == pytest.approx(1000.0)
+    assert stats.max_drawdown_pct == pytest.approx(0.20)
+
+
 def test_ema_and_atr_cover_success_and_insufficient_data():
     assert engine._ema([10.0, 12.0, 14.0], period=3) == pytest.approx(12.5)
 
