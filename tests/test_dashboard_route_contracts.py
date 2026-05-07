@@ -140,8 +140,10 @@ def test_root_dashboard_route_returns_html_shell(monkeypatch):
     html = body.decode("utf-8")
     assert status == 200
     assert headers["Content-Type"].startswith("text/html")
-    assert '<script src="/static/dashboard.v1.js?v=11"></script>' in html
-    assert 'href="/static/dashboard.v1.css?v=11"' in html
+    assert '<script src="/static/dashboard.v1.js?v=12"></script>' in html
+    assert 'href="/static/dashboard.v1.css?v=12"' in html
+    assert "Server Time" in html
+    assert "May 1 2026 UTC" not in html
     assert "BTCUSDT" in html
     required_ids = [
         "sticky-summary",
@@ -189,7 +191,7 @@ def test_static_route_serves_dashboard_js_asset(monkeypatch, tmp_path):
 
     server = _start_server()
     try:
-        status, headers, body = _request(server, "/static/dashboard.v1.js?v=11")
+        status, headers, body = _request(server, "/static/dashboard.v1.js?v=12")
     finally:
         server.shutdown()
         server.server_close()

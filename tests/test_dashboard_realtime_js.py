@@ -100,7 +100,15 @@ def test_dashboard_boot_tolerates_cards_without_heads(tmp_path):
       aiModels: [],
       aiEndpoints: [],
       aiEndpointModels: {},
-      intelligence: {},
+      intelligence: {
+        newsCards: [{ title: 'Cached item', source: 'Cache', sentiment: 'Neutral', impact: 3 }],
+        rawNews: [
+          { title: 'Bitcoin raw rise', source: 'RSS', publishedUtc: '2026-05-07T12:00:00+00:00' },
+          { title: 'Exchange hack loss', source: 'RSS' },
+          { title: 'Macro neutral', source: 'RSS' },
+          { title: 'ETF flow update', source: 'RSS' },
+        ],
+      },
       refreshMs: 1000,
       dashboardRefreshMs: 60000,
     };
@@ -268,14 +276,22 @@ def test_refresh_tolerates_missing_optional_refresh_controls(tmp_path):
       events: [],
       ohlcv: [],
       freshnessSeconds: 0.1,
-      serverTimeUtc: '2026-05-01T00:00:00+00:00',
+      serverTimeUtc: '2026-05-07T13:00:00+00:00',
       seq: 1,
       serverInstanceId: 'server-1',
       channel: 'dashboard',
       aiModels: [],
       aiEndpoints: [],
       aiEndpointModels: {},
-      intelligence: {},
+      intelligence: {
+        newsCards: [{ title: 'Cached item', source: 'Cache', sentiment: 'Neutral', impact: 3 }],
+        rawNews: [
+          { title: 'Bitcoin raw rise', source: 'RSS', publishedUtc: '2026-05-07T12:00:00+00:00' },
+          { title: 'Exchange hack loss', source: 'RSS' },
+          { title: 'Macro neutral', source: 'RSS' },
+          { title: 'ETF flow update', source: 'RSS' },
+        ],
+      },
       refreshMs: 1000,
       dashboardRefreshMs: 60000,
     };
@@ -444,14 +460,22 @@ def test_ai_decisions_renderer_and_refresh_paths_are_safe(tmp_path):
       aiDecisions: [{ decisionId: 'refresh-row', riskAction: 'allow_grid', note: 'from refresh' }],
       ohlcv: [],
       freshnessSeconds: 0.1,
-      serverTimeUtc: '2026-05-01T00:00:00+00:00',
+      serverTimeUtc: '2026-05-07T13:00:00+00:00',
       seq: 2,
       serverInstanceId: 'server-1',
       channel: 'dashboard',
       aiModels: [],
       aiEndpoints: [],
       aiEndpointModels: {},
-      intelligence: {},
+      intelligence: {
+        newsCards: [{ title: 'Cached item', source: 'Cache', sentiment: 'Neutral', impact: 3 }],
+        rawNews: [
+          { title: 'Bitcoin raw rise', source: 'RSS', publishedUtc: '2026-05-07T12:00:00+00:00' },
+          { title: 'Exchange hack loss', source: 'RSS' },
+          { title: 'Macro neutral', source: 'RSS' },
+          { title: 'ETF flow update', source: 'RSS' },
+        ],
+      },
       refreshMs: 1000,
       dashboardRefreshMs: 60000,
     };
@@ -564,13 +588,25 @@ def test_ai_decisions_renderer_and_refresh_paths_are_safe(tmp_path):
       ...dashboardSample,
       channel: 'status',
       seq: 1,
+      serverTimeUtc: '2026-05-07T13:00:00+00:00',
       aiDecisions: [{ decisionId: 'live-row', riskAction: 'allow_grid', note: 'from live payload' }],
     }));
     assert.ok(body.innerHTML.includes('live-row'));
+    assert.ok(elements.get('server-time').textContent.includes('GST'));
+    assert.ok(elements.get('macro-calendar').innerHTML.includes('May 7'));
+    assert.ok(elements.get('macro-calendar').innerHTML.includes('Completed -'));
+    assert.ok(elements.get('macro-calendar').innerHTML.includes('Upcoming -'));
+    assert.ok(!elements.get('macro-calendar').innerHTML.includes('May 1'));
 
     (async () => {
       await assert.doesNotReject(async () => t.refresh());
       assert.ok(body.innerHTML.includes('refresh-row'));
+      assert.ok(elements.get('server-time').textContent.includes('GST'));
+      assert.ok(elements.get('macro-calendar').innerHTML.includes('May 7'));
+      assert.ok(!elements.get('macro-calendar').innerHTML.includes('May 1'));
+      const renderedNews = elements.get('news-stack').innerHTML;
+      assert.strictEqual((renderedNews.match(/class="news-card"/g) || []).length, 5);
+      assert.ok(renderedNews.includes('Bitcoin raw rise'));
     })().catch(err => {
       console.error(err);
       process.exit(1);

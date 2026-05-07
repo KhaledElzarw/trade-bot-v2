@@ -8,6 +8,8 @@ const GRID_MODES = ['scalpy', 'fatty'];
 const MODE_CONTROL_MODES = ['scalpy', 'fatty', 'ai_optimized'];
 const GRID_MODE_LABELS = { scalpy: 'Scalpy', fatty: 'Fatty', ai_optimized: 'Optimized AI' };
 const LEGACY_OPTIMIZED_MODES = new Set(['flexy', 'ai_optimized']);
+const SERVER_TIME_ZONE = 'Asia/Dubai';
+const GST_OFFSET_MS = 4 * 60 * 60 * 1000;
 const INITIAL_QUERY = new URLSearchParams(window.location.search);
 function normalizeInitialTimeframe(tf) { return TIMEFRAMES.includes(tf) ? tf : '1m'; }
 const CONFIG_FIELDS = [
@@ -161,6 +163,26 @@ function fmtMoney(v) { return v === null || v === undefined ? '--' : `$${fmtNum(
 function fmtPct(v) { const n = Number(v); return Number.isFinite(n) ? `${(n * 100).toFixed(2)}%` : '--'; }
 function fmtPrice(v) { return v === null || v === undefined ? '--' : fmtNum(v, 2); }
 function fmtDate(v) { if (!v) return '--'; try { return new Date(v).toLocaleString(); } catch { return v; } }
+function fmtServerTime(v) {
+  if (!v) return '--';
+  const date = new Date(v);
+  if (Number.isNaN(date.getTime())) return String(v);
+  try {
+    const rendered = new Intl.DateTimeFormat(undefined, {
+      timeZone: SERVER_TIME_ZONE,
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: true,
+    }).format(date);
+    return `${rendered} GST`;
+  } catch {
+    return `${fmtDate(v)} GST`;
+  }
+}
 function signedClass(v) { return Number(v) > 0 ? 'positive' : Number(v) < 0 ? 'negative' : ''; }
 function humanAge(seconds) { if (seconds == null) return '--'; if (seconds < 60) return `${seconds.toFixed(2)}s`; if (seconds < 3600) return `${(seconds/60).toFixed(1)}m`; return `${(seconds/3600).toFixed(1)}h`; }
 function buildKvHtml(label, value, extraClass='', changed=false) { return `<div class="kv ${changed ? 'changed' : ''}"><div class="k">${label}</div><div class="v ${extraClass}">${value}</div></div>`; }
@@ -876,19 +898,67 @@ function impactBars(level, color = 'orange') {
   return `<div class="impact-bars">${Array.from({ length: 8 }, (_, i) => `<span class="${i < level ? `on ${color}` : ''}"></span>`).join('')}</div>`;
 }
 
+function newsSentiment(title) {
+  const text = String(title || '').toLowerCase();
+  if (['surge', 'inflow', 'rally', 'rise', 'gain'].some(word => text.includes(word))) return 'Bullish';
+  if (['fall', 'drop', 'outflow', 'hack', 'loss'].some(word => text.includes(word))) return 'Bearish';
+  return 'Neutral';
+}
+
+function normalizedNewsCards(intelligence) {
+  const cards = Array.isArray(intelligence && intelligence.newsCards)
+    ? intelligence.newsCards.filter(card => card && typeof card === 'object' && !Array.isArray(card)).map(card => ({ ...card }))
+    : [];
+  const seen = new Set(cards.map(card => String(card.title || '').trim().toLowerCase()));
+  const rawNews = Array.isArray(intelligence && intelligence.rawNews) ? intelligence.rawNews : [];
+  rawNews
+    .filter(item => item && typeof item === 'object' && !Array.isArray(item))
+    .forEach(item => {
+      const title = String(item.title || 'Crypto market update').trim();
+      const key = title.toLowerCase();
+      if (cards.length < 5 && key && !seen.has(key)) {
+        const sentiment = newsSentiment(title);
+        cards.push({
+          title,
+          source: item.source || 'RSS',
+          age: String(item.publishedUtc || 'latest').slice(0, 16).replace('T', ' '),
+          sentiment,
+          impact: title.toLowerCase().includes('bitcoin') || title.toLowerCase().includes('btc') ? 6 : 4,
+          url: item.url || '',
+        });
+        seen.add(key);
+      }
+    });
+  while (cards.length < 5) {
+    cards.push({
+      title: 'Awaiting fresh crypto headlines',
+      source: 'Local',
+      age: '30m refresh',
+      sentiment: 'Neutral',
+      impact: 3,
+      url: '',
+    });
+  }
+  return cards.slice(0, 5);
+}
+
 function renderIntelligence(status, cumulative, runtime, intelligence) {
-  if (intelligence && intelligence.newsCards && intelligence.newsCards.length) {
-    document.getElementById('news-stack').innerHTML = intelligence.newsCards.slice(0, 4).map(card => {
+  const hasIntelligenceNews = intelligence
+    && ((Array.isArray(intelligence.newsCards) && intelligence.newsCards.length)
+      || (Array.isArray(intelligence.rawNews) && intelligence.rawNews.length));
+  if (hasIntelligenceNews) {
+    const intelligenceCards = normalizedNewsCards(intelligence);
+    document.getElementById('news-stack').innerHTML = intelligenceCards.map(card => {
       const sentiment = card.sentiment || 'Neutral';
       const color = sentiment.toLowerCase() === 'bullish' ? 'green' : 'orange';
       const url = card.url || '';
-      const title = url ? `<a href="${url}" target="_blank" rel="noreferrer">${card.title || 'Crypto market update'}</a>` : (card.title || 'Crypto market update');
+      const title = url ? `<a href="${escapeHtml(url)}" target="_blank" rel="noreferrer">${escapeHtml(card.title || 'Crypto market update')}</a>` : escapeHtml(card.title || 'Crypto market update');
       return `
         <div class="news-card">
           <div class="news-title">${title}</div>
           <div class="news-row">
-            <div><span class="source-chip">${card.source || 'Local AI'}</span> <span class="news-meta">${card.age || '30m refresh'}</span></div>
-            <span class="sentiment-chip ${color === 'green' ? 'bullish' : 'neutral'}">${sentiment}</span>
+            <div><span class="source-chip">${escapeHtml(card.source || 'Local AI')}</span> <span class="news-meta">${escapeHtml(card.age || '30m refresh')}</span></div>
+            <span class="sentiment-chip ${color === 'green' ? 'bullish' : 'neutral'}">${escapeHtml(sentiment)}</span>
           </div>
           <div class="news-meta" style="margin-bottom:6px">Impact</div>
           ${impactBars(card.impact || 4, color)}
@@ -927,6 +997,22 @@ function renderIntelligence(status, cumulative, runtime, intelligence) {
       sentiment: Number(realized + unreal) >= 0 ? 'Bullish' : 'Neutral',
       color: Number(realized + unreal) >= 0 ? 'green' : 'orange',
       impact: Math.min(8, Math.max(2, Math.round(Math.abs(realized + unreal) / 25) + 2)),
+    },
+    {
+      title: 'ETF Flow And Session Liquidity Watch',
+      source: 'Flow',
+      age: 'daily',
+      sentiment: 'Neutral',
+      color: 'orange',
+      impact: 5,
+    },
+    {
+      title: 'Grid Exposure Check Before Next Macro Window',
+      source: 'Risk',
+      age: 'live setup',
+      sentiment: 'Neutral',
+      color: 'orange',
+      impact: 4,
     },
   ];
   document.getElementById('news-stack').innerHTML = cards.map(card => `
@@ -1030,20 +1116,52 @@ function renderRegime(status, runtime, intelligence) {
   if (updated && intelligence && intelligence.generatedAtUtc) updated.textContent = `AI refresh ${intelligence.generatedAtUtc.slice(11, 16)}`;
 }
 
-function renderMacroCalendar() {
-  const events = [
-    ['ISM Manufacturing', 'May 1', '14:00 UTC', 3, '#1767c2'],
-    ['Fed Speakers', 'May 1', '16:30 UTC', 2, '#f7931a'],
-    ['Jobs Data (NFP)', 'May 8', '12:30 UTC', 3, '#0d8a2f'],
-    ['CPI Watch', 'May 12', '12:30 UTC', 3, '#d54545'],
-    ['PCE Drift', 'May 28', '12:30 UTC', 2, '#13a7b4'],
+function macroCalendarEvents(serverTimeUtc) {
+  const current = new Date(serverTimeUtc || Date.now());
+  const nowUtcMs = Number.isNaN(current.getTime()) ? Date.now() : current.getTime();
+  const gstNow = new Date(nowUtcMs + GST_OFFSET_MS);
+  const year = gstNow.getUTCFullYear();
+  const month = gstNow.getUTCMonth();
+  const day = gstNow.getUTCDate();
+  const templates = [
+    ['Asia Liquidity Open', 8, 0, 2, '#1767c2', 'Watch Asia liquidity, early dollar tone, and grid spread pressure.', 'Asia session set the initial liquidity tone for BTC spread and inventory risk.'],
+    ['Europe Macro / Yields Check', 12, 0, 2, '#f7931a', 'Watch EUR/US yields and risk appetite before the US data window.', 'Europe macro flow updated rate-pressure context for the active grid.'],
+    ['US Data Window', 16, 30, 3, '#0d8a2f', 'Watch scheduled US releases and liquidity reaction around the event.', 'US data window passed; confirm whether volatility expanded or faded.'],
+    ['US Cash Open / ETF Flow', 17, 30, 3, '#d54545', 'Watch ETF flow, equity beta, and headline reaction during the cash open.', 'US cash open flow is in; reassess BTC trend pressure and exposure.'],
+    ['Daily Close Risk Review', 23, 45, 2, '#13a7b4', 'Review realized PnL, open exposure, and overnight grid risk.', 'Daily risk review completed; carry only exposure justified by the regime.'],
   ];
-  document.getElementById('macro-calendar').innerHTML = events.map((ev, idx) => `
-    <div class="calendar-row">
-      <div class="calendar-icon" style="background:${ev[4]}">${idx + 1}</div>
-      <strong>${ev[0]}</strong>
-      <span class="calendar-meta">${ev[1]}<br>${ev[2]}</span>
-      <div><div class="calendar-meta" style="margin-bottom:5px">Impact</div><div class="impact-dots">${Array.from({ length: 3 }, (_, i) => `<span class="${i < ev[3] ? 'on' : ''}"></span>`).join('')}</div></div>
+  return templates.map(([title, hour, minute, impact, color, upcoming, completed]) => {
+    const eventUtcMs = Date.UTC(year, month, day, hour - 4, minute, 0, 0);
+    const eventGst = new Date(eventUtcMs + GST_OFFSET_MS);
+    const done = nowUtcMs >= eventUtcMs;
+    const hour12 = hour % 12 || 12;
+    const ampm = hour < 12 ? 'AM' : 'PM';
+    return {
+      title,
+      date: eventGst.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
+      time: `${hour12}:${String(minute).padStart(2, '0')} ${ampm} GST`,
+      impact,
+      color,
+      status: done ? 'Completed' : 'Upcoming',
+      summary: done ? completed : upcoming,
+    };
+  });
+}
+
+function renderMacroCalendar(serverTimeUtc) {
+  const target = document.getElementById('macro-calendar');
+  if (!target) return;
+  const events = macroCalendarEvents(serverTimeUtc);
+  target.innerHTML = events.map((ev, idx) => `
+    <div class="calendar-row ${ev.status.toLowerCase()}">
+      <div class="calendar-icon" style="background:${ev.color}">${idx + 1}</div>
+      <div class="calendar-main">
+        <strong>${escapeHtml(ev.title)}</strong>
+        <div class="calendar-summary">${escapeHtml(ev.status)} - ${escapeHtml(ev.summary)}</div>
+      </div>
+      <span class="calendar-meta">${escapeHtml(ev.date)}<br>${escapeHtml(ev.time)}</span>
+      <span class="status-chip ${ev.status === 'Completed' ? 'good' : 'warn'}">${escapeHtml(ev.status)}</span>
+      <div class="calendar-impact"><div class="calendar-meta" style="margin-bottom:5px">Impact</div><div class="impact-dots">${Array.from({ length: 3 }, (_, i) => `<span class="${i < ev.impact ? 'on' : ''}"></span>`).join('')}</div></div>
     </div>
   `).join('');
 }
@@ -1878,7 +1996,7 @@ function applyLiveMarketPayload(data, renderChart = true) {
   const freshLabel = document.getElementById('fresh-label');
   if (freshLabel) freshLabel.textContent = `Live payload • ${humanAge(stateUi.lastStatusFreshnessSeconds)}`;
   const serverTime = document.getElementById('server-time');
-  if (serverTime) serverTime.textContent = fmtDate(data.serverTimeUtc);
+  if (serverTime) serverTime.textContent = fmtServerTime(data.serverTimeUtc);
   stateUi.marketRefreshMs = Math.max(1000, Number(data.refreshMs || stateUi.marketRefreshMs || 1000));
   safeRender('summary', () => renderStickySummary(status, cumulative, runtime, grid));
   if (data.eventsPatch) {
@@ -1894,6 +2012,7 @@ function applyLiveMarketPayload(data, renderChart = true) {
   }
   safeRender('orders', () => renderOrders());
   safeRender('status', () => renderLiveStatusFooter(status, state, runtime, data, grid));
+  safeRender('calendar', () => renderMacroCalendar(data.serverTimeUtc));
   if (renderChart) {
     stateUi.lastOhlcv = ohlcv || [];
     safeRender('chart', () => drawCandles(ohlcv || []));
@@ -2028,7 +2147,7 @@ async function refresh() {
       aiToggle.classList.toggle('ai-off', !aiEnabled);
     }
     setTextIfPresent('fresh-label', freshnessSeconds != null ? `Live payload • ${humanAge(freshnessSeconds)}` : 'No timestamp');
-    setTextIfPresent('server-time', fmtDate(serverTimeUtc));
+    setTextIfPresent('server-time', fmtServerTime(serverTimeUtc));
     safeRender('summary', () => renderStickySummary(status, cumulative, runtime, grid));
     safeRender('status', () => renderLiveStatusFooter(status, state, runtime, data, grid));
     safeRender('events', () => renderEvents((events || []).slice().reverse()));
@@ -2037,7 +2156,7 @@ async function refresh() {
     safeRender('timeframe', () => renderTimeframeControls());
     safeRender('intelligence', () => renderIntelligence(status, cumulative, runtime, intelligence));
     safeRender('regime', () => renderRegime(status, runtime, intelligence));
-    safeRender('calendar', () => renderMacroCalendar());
+    safeRender('calendar', () => renderMacroCalendar(serverTimeUtc));
     const buyFilter = document.getElementById('orders-filter-buy-btn');
     if (buyFilter) buyFilter.style.color = '#35d08a';
     const sellFilter = document.getElementById('orders-filter-sell-btn');

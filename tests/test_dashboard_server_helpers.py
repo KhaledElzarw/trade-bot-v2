@@ -356,12 +356,51 @@ def test_fallback_intelligence_pads_cards_and_scores_sentiment():
         "Bullish",
         "Bearish",
         "Neutral",
+        "Neutral",
+        "Neutral",
     ]
     assert payload["newsCards"][0]["impact"] == 6
     assert payload["source"] == "deterministic_fallback"
     assert payload["regimeSignals"][-1]["status"] == "Watch"
     assert down_rows[0]["status"] == "Downtrend"
     assert down_final["title"] == "Downtrend"
+
+
+def test_gst_server_time_and_macro_calendar_update_daily():
+    rendered_time = dashboard_server.format_gst_datetime(
+        datetime(2026, 5, 7, 17, 30, 45, tzinfo=timezone.utc)
+    )
+    naive_time = dashboard_server.format_gst_datetime(
+        datetime(2026, 5, 7, 0, 0, 0)
+    )
+
+    assert rendered_time == "May 7 2026, 9:30:45 PM GST"
+    assert naive_time == "May 7 2026, 4:00:00 AM GST"
+
+    events = dashboard_server._macro_calendar_events(
+        datetime(2026, 5, 7, 13, 0, 0, tzinfo=timezone.utc)
+    )
+    naive_events = dashboard_server._macro_calendar_events(
+        datetime(2026, 5, 7, 13, 0, 0)
+    )
+    assert [event["date"] for event in events] == ["May 7"] * 5
+    assert naive_events[0]["date"] == "May 7"
+    assert [event["status"] for event in events] == [
+        "Completed",
+        "Completed",
+        "Completed",
+        "Upcoming",
+        "Upcoming",
+    ]
+
+    html = dashboard_server._render_macro_calendar(
+        datetime(2026, 5, 7, 13, 0, 0, tzinfo=timezone.utc)
+    )
+    assert "US Data Window" in html
+    assert "Completed - US data window passed" in html
+    assert "Upcoming - Watch ETF flow" in html
+    assert "May 1" not in html
+    assert html.count('class="calendar-row') == 5
 
 
 def test_format_and_server_render_helpers_cover_empty_and_value_rows():
@@ -410,11 +449,36 @@ def test_format_and_server_render_helpers_cover_empty_and_value_rows():
             "tone": "blue",
         }]
     })
+    many_news_html = dashboard_server._render_server_news({
+        "newsCards": [
+            {
+                "title": f"Story {idx}",
+                "source": "Fake",
+                "age": "now",
+                "sentiment": "Neutral",
+                "impact": 2,
+            }
+            for idx in range(6)
+        ]
+    })
+    raw_padded_news_html = dashboard_server._render_server_news({
+        "newsCards": [{"title": "Existing", "source": "Fake"}],
+        "rawNews": [
+            {"title": "Bitcoin raw rise", "source": "RSS", "publishedUtc": "2026-05-07T12:00:00+00:00"},
+            {"title": "Exchange hack loss", "source": "RSS"},
+            {"title": "Macro neutral", "source": "RSS"},
+            {"title": "ETF flow update", "source": "RSS"},
+        ],
+    })
 
     assert "ENTER" in events_html
     assert "Below market 10.00%" in orders_html
     assert impact_html.count("on green") == 3
     assert '<a href="https://example.test/story"' in news_html
+    assert many_news_html.count('class="news-card"') == 5
+    assert raw_padded_news_html.count('class="news-card"') == 5
+    assert "Bitcoin raw rise" in raw_padded_news_html
+    assert "Exchange hack loss" in raw_padded_news_html
     assert "var(--blue)" in signals_html
 
 

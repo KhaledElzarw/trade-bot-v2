@@ -7,7 +7,7 @@ import subprocess
 import time
 import threading
 from collections import deque
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -39,6 +39,7 @@ INTELLIGENCE_PATH = BASE_DIR / "dashboard_intelligence.json"
 AI_SIGNAL_PATH = BASE_DIR / "ai_signal.json"
 AI_DECISIONS_PATH = BASE_DIR / "ai_decisions.jsonl"
 STATIC_DIR = BASE_DIR / "dashboard" / "static"
+GST = timezone(timedelta(hours=4), "GST")
 HOST = os.getenv("TRADEBOT_DASHBOARD_HOST", "0.0.0.0")
 PORT = int(os.getenv("TRADEBOT_DASHBOARD_PORT", "8844"))
 DASHBOARD_TOKEN = os.getenv("TRADEBOT_DASHBOARD_TOKEN", "").strip()
@@ -68,6 +69,54 @@ NEWS_SOURCES = [
     ("Cointelegraph", "https://cointelegraph.com/rss"),
     ("Decrypt", "https://decrypt.co/feed"),
     ("The Block", "https://www.theblock.co/rss.xml"),
+]
+NEWS_CARD_LIMIT = 5
+MACRO_CALENDAR_TEMPLATE = [
+    {
+        "title": "Asia Liquidity Open",
+        "hour": 8,
+        "minute": 0,
+        "impact": 2,
+        "color": "#1767c2",
+        "upcoming": "Watch Asia liquidity, early dollar tone, and grid spread pressure.",
+        "completed": "Asia session set the initial liquidity tone for BTC spread and inventory risk.",
+    },
+    {
+        "title": "Europe Macro / Yields Check",
+        "hour": 12,
+        "minute": 0,
+        "impact": 2,
+        "color": "#f7931a",
+        "upcoming": "Watch EUR/US yields and risk appetite before the US data window.",
+        "completed": "Europe macro flow updated rate-pressure context for the active grid.",
+    },
+    {
+        "title": "US Data Window",
+        "hour": 16,
+        "minute": 30,
+        "impact": 3,
+        "color": "#0d8a2f",
+        "upcoming": "Watch scheduled US releases and liquidity reaction around the event.",
+        "completed": "US data window passed; confirm whether volatility expanded or faded.",
+    },
+    {
+        "title": "US Cash Open / ETF Flow",
+        "hour": 17,
+        "minute": 30,
+        "impact": 3,
+        "color": "#d54545",
+        "upcoming": "Watch ETF flow, equity beta, and headline reaction during the cash open.",
+        "completed": "US cash open flow is in; reassess BTC trend pressure and exposure.",
+    },
+    {
+        "title": "Daily Close Risk Review",
+        "hour": 23,
+        "minute": 45,
+        "impact": 2,
+        "color": "#13a7b4",
+        "upcoming": "Review realized PnL, open exposure, and overnight grid risk.",
+        "completed": "Daily risk review completed; carry only exposure justified by the regime.",
+    },
 ]
 AI_ENDPOINTS = [
     {"key": "local", "label": "Local", "provider": "ollama", "baseUrl": "http://127.0.0.1:11434/v1"},
@@ -172,7 +221,7 @@ HTML = r'''<!doctype html>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Tradebot Live Dashboard</title>
-  <link rel="stylesheet" href="/static/dashboard.v1.css?v=11">
+  <link rel="stylesheet" href="/static/dashboard.v1.css?v=12">
 </head>
 <body>
 <div class="wrap">
@@ -186,7 +235,7 @@ HTML = r'''<!doctype html>
       </div>
     </div>
     <div class="pillrow">
-      <div class="pill">May 1 2026 UTC <span id="server-time">--</span></div>
+      <div class="pill">Server Time <span id="server-time">--</span></div>
       <button class="btn" type="button">BTC/USDT</button>
       <button class="btn" type="button" id="top-timeframe">1m</button>
       <button class="icon-btn btn" id="bot-toggle-btn" type="button" title="Pause / play bot">⏸</button>
@@ -344,7 +393,7 @@ HTML = r'''<!doctype html>
     </section>
   </div>
 </div>
-<script src="/static/dashboard.v1.js?v=11"></script>
+<script src="/static/dashboard.v1.js?v=12"></script>
 </body>
 </html>'''
 
@@ -365,6 +414,16 @@ def next_sequence(channel: str) -> int:
     with _sequence_lock:
         _sequences[channel] = int(_sequences.get(channel, 0)) + 1
         return _sequences[channel]
+
+
+def format_gst_datetime(value: datetime | None = None) -> str:
+    current = value or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    gst_now = current.astimezone(GST)
+    hour = gst_now.hour % 12 or 12
+    ampm = "AM" if gst_now.hour < 12 else "PM"
+    return f"{gst_now:%b} {gst_now.day} {gst_now.year}, {hour}:{gst_now:%M:%S} {ampm} GST"
 
 
 def _state_ai_models(state: dict) -> list[str]:
@@ -1304,12 +1363,20 @@ def _local_ai_assess_intelligence(state: dict, status: dict, ohlcv: list[dict], 
     return parsed
 
 
+def _news_sentiment(title_l: str) -> str:
+    if any(w in title_l for w in ("surge", "inflow", "rally", "rise", "gain")):
+        return "Bullish"
+    if any(w in title_l for w in ("fall", "drop", "outflow", "hack", "loss")):
+        return "Bearish"
+    return "Neutral"
+
+
 def _fallback_intelligence(status: dict, ohlcv: list[dict], news_items: list[dict], error: str = "") -> dict:
     rows, final = _deterministic_regime_rows(status, ohlcv, error)
     cards = []
-    for item in (news_items or [])[:3]:
+    for item in (news_items or [])[:NEWS_CARD_LIMIT]:
         title_l = item.get("title", "").lower()
-        sentiment = "Bullish" if any(w in title_l for w in ("surge", "inflow", "rally", "rise", "gain")) else ("Bearish" if any(w in title_l for w in ("fall", "drop", "outflow", "hack", "loss")) else "Neutral")
+        sentiment = _news_sentiment(title_l)
         cards.append({
             "title": item.get("title", "Crypto market update"),
             "source": item.get("source", "RSS"),
@@ -1318,7 +1385,7 @@ def _fallback_intelligence(status: dict, ohlcv: list[dict], news_items: list[dic
             "impact": 6 if "bitcoin" in title_l or "btc" in title_l else 4,
             "url": item.get("url", ""),
         })
-    while len(cards) < 3:
+    while len(cards) < NEWS_CARD_LIMIT:
         cards.append({"title": "Awaiting fresh crypto headlines", "source": "Local", "age": "30m refresh", "sentiment": "Neutral", "impact": 3, "url": ""})
     return {"newsCards": cards, "regimeSignals": rows, "finalRegime": final, "source": "deterministic_fallback", "model": "", "error": error}
 
@@ -1527,10 +1594,102 @@ def _render_impact_bars(level, color: str = "orange", size: int = 8) -> str:
     return '<div class="impact-bars">' + "".join(f'<span class="{"on " + cls if i < level_i else ""}"></span>' for i in range(size)) + "</div>"
 
 
+def _macro_calendar_events(now: datetime | None = None) -> list[dict]:
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    gst_now = current.astimezone(GST)
+    events = []
+    for item in MACRO_CALENDAR_TEMPLATE:
+        event_gst = gst_now.replace(
+            hour=int(item["hour"]),
+            minute=int(item["minute"]),
+            second=0,
+            microsecond=0,
+        )
+        completed = gst_now >= event_gst
+        hour = event_gst.hour % 12 or 12
+        ampm = "AM" if event_gst.hour < 12 else "PM"
+        events.append({
+            "title": item["title"],
+            "date": f"{event_gst:%b} {event_gst.day}",
+            "time": f"{hour}:{event_gst:%M} {ampm} GST",
+            "impact": item["impact"],
+            "color": item["color"],
+            "status": "Completed" if completed else "Upcoming",
+            "summary": item["completed"] if completed else item["upcoming"],
+        })
+    return events
+
+
+def _render_macro_calendar(now: datetime | None = None) -> str:
+    rows = []
+    for idx, event in enumerate(_macro_calendar_events(now), start=1):
+        status = str(event["status"])
+        status_cls = "good" if status == "Completed" else "warn"
+        dots = "".join(
+            f'<span class="{"on" if i < int(event["impact"]) else ""}"></span>'
+            for i in range(3)
+        )
+        rows.append(
+            f'<div class="calendar-row {status.lower()}">'
+            f'<div class="calendar-icon" style="background:{html_lib.escape(str(event["color"]))}">{idx}</div>'
+            '<div class="calendar-main">'
+            f'<strong>{html_lib.escape(str(event["title"]))}</strong>'
+            f'<div class="calendar-summary">{html_lib.escape(status)} - {html_lib.escape(str(event["summary"]))}</div>'
+            "</div>"
+            f'<span class="calendar-meta">{html_lib.escape(str(event["date"]))}<br>{html_lib.escape(str(event["time"]))}</span>'
+            f'<span class="status-chip {status_cls}">{html_lib.escape(status)}</span>'
+            '<div class="calendar-impact">'
+            '<div class="calendar-meta" style="margin-bottom:5px">Impact</div>'
+            f'<div class="impact-dots">{dots}</div>'
+            "</div>"
+            "</div>"
+        )
+    return "".join(rows)
+
+
+def _normalized_news_cards(intelligence: dict) -> list[dict]:
+    cards = [
+        dict(card)
+        for card in (intelligence.get("newsCards") or [])
+        if isinstance(card, dict)
+    ]
+    seen_titles = {str(card.get("title") or "").strip().lower() for card in cards}
+    for item in [
+        raw
+        for raw in (intelligence.get("rawNews") or [])
+        if isinstance(raw, dict)
+    ]:
+        title = str(item.get("title") or "Crypto market update").strip()
+        title_key = title.lower()
+        if len(cards) < NEWS_CARD_LIMIT and title_key and title_key not in seen_titles:
+            title_l = title.lower()
+            cards.append({
+                "title": title,
+                "source": item.get("source") or "RSS",
+                "age": str(item.get("publishedUtc") or "latest")[:16].replace("T", " "),
+                "sentiment": _news_sentiment(title_l),
+                "impact": 6 if "bitcoin" in title_l or "btc" in title_l else 4,
+                "url": item.get("url") or "",
+            })
+            seen_titles.add(title_key)
+    while len(cards) < NEWS_CARD_LIMIT:
+        cards.append({
+            "title": "Awaiting fresh crypto headlines",
+            "source": "Local",
+            "age": "30m refresh",
+            "sentiment": "Neutral",
+            "impact": 3,
+            "url": "",
+        })
+    return cards[:NEWS_CARD_LIMIT]
+
+
 def _render_server_news(intelligence: dict) -> str:
-    cards = intelligence.get("newsCards") or []
+    cards = _normalized_news_cards(intelligence)
     out = []
-    for card in cards[:4]:
+    for card in cards:
         sentiment = str(card.get("sentiment") or "Neutral")
         color = "green" if sentiment.lower() == "bullish" else "orange"
         title = html_lib.escape(str(card.get("title") or "Crypto market update"))
@@ -1606,13 +1765,7 @@ def render_initial_dashboard_html(interval_override: str | None = None) -> str:
     news_html = _render_server_news(intelligence)
     signal_html = _render_server_signals(intelligence)
     final_regime = intelligence.get("finalRegime") or {}
-    calendar_html = (
-        '<div class="calendar-row"><div class="calendar-icon" style="background:#1767c2">1</div><strong>ISM Manufacturing</strong><span class="calendar-meta">May 1<br>14:00 UTC</span><div><div class="calendar-meta" style="margin-bottom:5px">Impact</div><div class="impact-dots"><span class="on"></span><span class="on"></span><span class="on"></span></div></div></div>'
-        '<div class="calendar-row"><div class="calendar-icon" style="background:#f7931a">2</div><strong>Fed Speakers</strong><span class="calendar-meta">May 1<br>16:30 UTC</span><div><div class="calendar-meta" style="margin-bottom:5px">Impact</div><div class="impact-dots"><span class="on"></span><span class="on"></span><span></span></div></div></div>'
-        '<div class="calendar-row"><div class="calendar-icon" style="background:#0d8a2f">3</div><strong>Jobs Data (NFP)</strong><span class="calendar-meta">May 8<br>12:30 UTC</span><div><div class="calendar-meta" style="margin-bottom:5px">Impact</div><div class="impact-dots"><span class="on"></span><span class="on"></span><span class="on"></span></div></div></div>'
-        '<div class="calendar-row"><div class="calendar-icon" style="background:#d54545">4</div><strong>CPI Watch</strong><span class="calendar-meta">May 12<br>12:30 UTC</span><div><div class="calendar-meta" style="margin-bottom:5px">Impact</div><div class="impact-dots"><span class="on"></span><span class="on"></span><span class="on"></span></div></div></div>'
-        '<div class="calendar-row"><div class="calendar-icon" style="background:#13a7b4">5</div><strong>PCE Drift</strong><span class="calendar-meta">May 28<br>12:30 UTC</span><div><div class="calendar-meta" style="margin-bottom:5px">Impact</div><div class="impact-dots"><span class="on"></span><span class="on"></span><span></span></div></div></div>'
-    )
+    calendar_html = _render_macro_calendar()
     status_html = "".join(
         f'<div class="kv"><div class="k">{label}</div><div class="v">{html_lib.escape(str(value))}</div></div>'
         for label, value in [
@@ -1634,7 +1787,7 @@ def render_initial_dashboard_html(interval_override: str | None = None) -> str:
     page = HTML
     replacements = {
         'id="fresh-label">Waiting for data</span>': f'id="fresh-label">{html_lib.escape(fresh_label)}</span>',
-        'id="server-time">--</span>': f'id="server-time">{html_lib.escape(datetime.now(timezone.utc).strftime("%H:%M:%S"))}</span>',
+        'id="server-time">--</span>': f'id="server-time">{html_lib.escape(format_gst_datetime())}</span>',
         '<button class="btn" type="button" id="top-timeframe">1m</button>': f'<a class="btn" id="top-timeframe" href="/?interval={html_lib.escape(interval)}">{html_lib.escape(SUPPORTED_INTERVALS[interval]["label"])}</a>',
         'id="trading-state-label">LIVE / AI-GATED</div>': f'id="trading-state-label">{html_lib.escape(state_label)}</div>',
         'id="sticky-summary"></div>': f'id="sticky-summary">{metrics_html}</div>',
