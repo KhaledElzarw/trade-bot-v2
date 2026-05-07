@@ -211,7 +211,7 @@ function acceptPayloadSeq(channel, seq, instanceId = null) {
   stateUi.lastSeq[key] = next;
   return true;
 }
-function getLayoutKey() { return 'tradebot-layout-v5'; }
+function getLayoutKey() { return 'tradebot-layout-v6'; }
 function chartPairLabel(symbol = chartSymbol()) {
   const raw = String(symbol || 'BTCUSDT').toUpperCase();
   if (raw.endsWith('USDT')) return `${raw.slice(0, -4)}/USD`;

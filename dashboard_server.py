@@ -172,7 +172,7 @@ HTML = r'''<!doctype html>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Tradebot Live Dashboard</title>
-  <link rel="stylesheet" href="/static/dashboard.v1.css?v=6">
+  <link rel="stylesheet" href="/static/dashboard.v1.css?v=7">
 </head>
 <body>
 <div class="wrap">
@@ -347,7 +347,7 @@ HTML = r'''<!doctype html>
     </section>
   </div>
 </div>
-<script src="/static/dashboard.v1.js?v=6"></script>
+<script src="/static/dashboard.v1.js?v=7"></script>
 </body>
 </html>'''
 
