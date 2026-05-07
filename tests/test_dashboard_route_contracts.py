@@ -140,8 +140,8 @@ def test_root_dashboard_route_returns_html_shell(monkeypatch):
     html = body.decode("utf-8")
     assert status == 200
     assert headers["Content-Type"].startswith("text/html")
-    assert '<script src="/static/dashboard.v1.js?v=8"></script>' in html
-    assert 'href="/static/dashboard.v1.css?v=8"' in html
+    assert '<script src="/static/dashboard.v1.js?v=9"></script>' in html
+    assert 'href="/static/dashboard.v1.css?v=9"' in html
     assert "BTCUSDT" in html
     required_ids = [
         "sticky-summary",
@@ -155,10 +155,8 @@ def test_root_dashboard_route_returns_html_shell(monkeypatch):
         "state-exposure",
         "state-action",
         "market-chart",
-        "latest-candle",
         "market-legend",
         "chart-price-pill",
-        "chart-quote-line",
         "hover-ohlcv",
         "news-stack",
         "signal-table",
@@ -179,6 +177,7 @@ def test_root_dashboard_route_returns_html_shell(monkeypatch):
     ]
     for element_id in required_ids:
         assert f'id="{element_id}"' in html
+    assert 'class="candle-details" id="hover-ohlcv"' in html
 
 
 def test_static_route_serves_dashboard_js_asset(monkeypatch, tmp_path):
@@ -190,7 +189,7 @@ def test_static_route_serves_dashboard_js_asset(monkeypatch, tmp_path):
 
     server = _start_server()
     try:
-        status, headers, body = _request(server, "/static/dashboard.v1.js?v=8")
+        status, headers, body = _request(server, "/static/dashboard.v1.js?v=9")
     finally:
         server.shutdown()
         server.server_close()

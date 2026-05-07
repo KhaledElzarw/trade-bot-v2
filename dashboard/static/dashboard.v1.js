@@ -110,6 +110,8 @@ const stateUi = {
   historyOffset: Number(localStorage.getItem('tradebot-chart-history-offset') || 0),
   panOffset: Number(localStorage.getItem('tradebot-chart-pan-offset') || 0),
   visibleOhlcv: [],
+  chartHoverIndex: null,
+  chartDragState: null,
 };
 
 function setTheme(theme) {
@@ -212,6 +214,26 @@ function acceptPayloadSeq(channel, seq, instanceId = null) {
   return true;
 }
 function getLayoutKey() { return 'tradebot-layout-v7'; }
+function persistChartViewport() {
+  localStorage.setItem('tradebot-chart-limit', String(Math.max(30, Math.min(1000, Number(stateUi.candleLimit || 180)))));
+  localStorage.setItem('tradebot-chart-pan-offset', String(Math.max(0, Number(stateUi.panOffset || 0))));
+}
+function setCandleDetails(candle) {
+  const el = document.getElementById('hover-ohlcv');
+  if (!el) return;
+  if (!candle) {
+    el.innerHTML = '<strong>Candle</strong><span>--</span>';
+    return;
+  }
+  const ts = candle.openTimeMs ? `${new Date(candle.openTimeMs).toLocaleString()}  ` : '';
+  el.innerHTML = `<strong>Candle</strong><span>${ts}O ${fmtPrice(candle.open)}  H ${fmtPrice(candle.high)}  L ${fmtPrice(candle.low)}  C ${fmtPrice(candle.close)}  Vol ${fmtMoney(candle.volumeUsdt)}</span>`;
+}
+function eventTimeMs(ev) {
+  const raw = ev && (ev.tsUtc || ev.ts || ev.time || ev.timestamp);
+  if (!raw) return null;
+  const parsed = typeof raw === 'number' ? raw : Date.parse(raw);
+  return Number.isFinite(parsed) ? parsed : null;
+}
 function chartPairLabel(symbol = chartSymbol()) {
   const raw = String(symbol || 'BTCUSDT').toUpperCase();
   if (raw.endsWith('USDT')) return `${raw.slice(0, -4)}/USD`;
@@ -983,34 +1005,21 @@ function drawCandles(ohlcv) {
   canvas.height = rect.height * devicePixelRatio;
   ctx.scale(devicePixelRatio, devicePixelRatio);
   ctx.clearRect(0, 0, rect.width, rect.height);
-  if (!visibleRows.length) return;
+  if (!visibleRows.length) {
+    setCandleDetails(null);
+    return;
+  }
   const fallback = canvas.parentElement ? canvas.parentElement.querySelector('.server-chart-fallback') : null;
   if (fallback) fallback.remove();
-  const priceArea = rect.height * 0.76;
-  const volumeTop = priceArea + 10;
+  const priceArea = rect.height - 8;
   const padL = 22, padR = 72, padT = 18, padB = 24;
   const highs = visibleRows.map(c => c.high);
   const lows = visibleRows.map(c => c.low);
-  const vols = visibleRows.map(c => c.volumeUsdt);
   const maxP = Math.max(...highs), minP = Math.min(...lows), spanP = Math.max(1e-9, maxP - minP);
-  const maxV = Math.max(...vols, 1);
   const chartW = rect.width - padL - padR;
   const candleGap = chartW / Math.max(visibleRows.length, 1);
   const candleW = Math.max(5, candleGap * 0.62);
-  const third = chartW / 3;
-  const regimes = [
-    ['DISTRIBUTION', 'rgba(213,69,69,.065)', '#d54545'],
-    ['RANGE CONSOLIDATION', 'rgba(23,103,194,.07)', '#1767c2'],
-    ['ACCUMULATION', 'rgba(13,138,47,.06)', '#0d8a2f'],
-  ];
-  regimes.forEach((regime, i) => {
-    ctx.fillStyle = regime[1];
-    ctx.fillRect(padL + third * i, padT, third, priceArea - padT - padB);
-    ctx.fillStyle = regime[2];
-    ctx.font = '800 12px Inter, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText(regime[0], padL + third * i + third / 2, padT + 24);
-  });
+  const priceToY = price => padT + (maxP - Number(price || 0)) / spanP * (priceArea - padT - padB);
   ctx.strokeStyle = 'rgba(23,23,19,.09)';
   ctx.lineWidth = 1;
   for (let i = 0; i < 6; i++) {
@@ -1022,56 +1031,159 @@ function drawCandles(ohlcv) {
     ctx.textAlign = 'left';
     ctx.fillText(fmtPrice(price), rect.width - padR + 10, y + 4);
   }
-  const hoverState = canvas.__hoverIndex;
-  ctx.beginPath();
-  visibleRows.forEach((c, i) => {
-    const x = padL + candleGap * (i + 0.5);
-    const y = padT + (maxP - c.close) / spanP * (priceArea - padT - padB);
-    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  const hoverState = stateUi.chartHoverIndex;
+  const markerBuckets = new Map();
+  (stateUi.lastEvents || []).forEach(ev => {
+    if (ev.event !== 'ENTER' && ev.event !== 'EXIT') return;
+    const ts = eventTimeMs(ev);
+    if (!Number.isFinite(ts)) return;
+    const idx = visibleRows.findIndex((c, i) => {
+      const open = Number(c.openTimeMs || 0);
+      const close = Number(c.closeTimeMs || visibleRows[i + 1]?.openTimeMs || (open + (intervalDurationMs(stateUi.timeframe) || 0)));
+      return ts >= open && ts <= close;
+    });
+    if (idx < 0) return;
+    if (!markerBuckets.has(idx)) markerBuckets.set(idx, []);
+    markerBuckets.get(idx).push(ev);
   });
-  ctx.strokeStyle = 'rgba(247,147,26,.95)';
-  ctx.lineWidth = 2;
-  ctx.stroke();
   visibleRows.forEach((c, i) => {
     const x = padL + candleGap * (i + 0.5);
-    const yHigh = padT + (maxP - c.high) / spanP * (priceArea - padT - padB);
-    const yLow = padT + (maxP - c.low) / spanP * (priceArea - padT - padB);
-    const yOpen = padT + (maxP - c.open) / spanP * (priceArea - padT - padB);
-    const yClose = padT + (maxP - c.close) / spanP * (priceArea - padT - padB);
+    const yHigh = priceToY(c.high);
+    const yLow = priceToY(c.low);
+    const yOpen = priceToY(c.open);
+    const yClose = priceToY(c.close);
     const up = c.close >= c.open;
-    const color = up ? '#4dbb92' : '#33302a';
+    const color = up ? '#2fc486' : '#d54545';
     ctx.strokeStyle = color;
     ctx.beginPath(); ctx.moveTo(x, yHigh); ctx.lineTo(x, yLow); ctx.stroke();
     const top = Math.min(yOpen, yClose), body = Math.max(2, Math.abs(yClose - yOpen));
     ctx.fillStyle = color;
     ctx.fillRect(x - candleW / 2, top, candleW, body);
-    const volH = (c.volumeUsdt / maxV) * (rect.height - volumeTop - 18);
-    ctx.globalAlpha = 0.45;
-    ctx.fillRect(x - candleW / 2, rect.height - volH - 8, candleW, volH);
-    ctx.globalAlpha = 1;
     if (hoverState === i) {
       ctx.strokeStyle = '#f7931a';
       ctx.strokeRect(x - candleW / 2 - 2, top - 2, candleW + 4, body + 4);
     }
   });
+  markerBuckets.forEach((events, idx) => {
+    const c = visibleRows[idx];
+    const x = padL + candleGap * (idx + 0.5);
+    events.slice(-4).forEach((ev, markerIdx) => {
+      const isEntry = ev.event === 'ENTER';
+      const label = isEntry ? 'B' : 'S';
+      const color = isEntry ? '#0d8a2f' : '#d54545';
+      const anchorY = Number.isFinite(Number(ev.price)) ? priceToY(ev.price) : priceToY(isEntry ? c.low : c.high);
+      const offset = 16 + markerIdx * 18;
+      const y = isEntry
+        ? Math.min(priceArea - padB - 11, anchorY + offset)
+        : Math.max(padT + 11, anchorY - offset);
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(x, y, 10, 0, Math.PI * 2);
+      ctx.fillStyle = color;
+      ctx.fill();
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = 'rgba(255,253,248,.95)';
+      ctx.stroke();
+      ctx.fillStyle = '#fffdf8';
+      ctx.font = '900 11px Inter, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(label, x, y + 0.5);
+      ctx.restore();
+    });
+  });
   const latest = visibleRows[visibleRows.length - 1];
   const delta = latest.open ? latest.close - latest.open : 0;
   const deltaPct = latest.open ? delta / latest.open : 0;
-  setHtmlIfPresent('latest-candle', `<strong>Live candle</strong><span>O ${fmtPrice(latest.open)}  H ${fmtPrice(latest.high)}  L ${fmtPrice(latest.low)}  C ${fmtPrice(latest.close)}  Vol ${fmtMoney(latest.volumeUsdt)}</span>`);
-  setHtmlIfPresent('market-legend', `<span><b>${latest.symbol || 'BTC/USDT'}</b></span><span>O ${fmtPrice(latest.open)}</span><span>H ${fmtPrice(latest.high)}</span><span>L ${fmtPrice(latest.low)}</span><span>C ${fmtPrice(latest.close)}</span><span class="${signedClass(delta)}">${delta >= 0 ? '+' : ''}${fmtMoney(delta)} (${deltaPct >= 0 ? '+' : ''}${fmtPct(deltaPct)})</span>`);
-  setTextIfPresent('chart-quote-line', `O ${fmtPrice(latest.open)}  H ${fmtPrice(latest.high)}  L ${fmtPrice(latest.low)}  C ${fmtPrice(latest.close)}`);
-  canvas.onmousemove = ev => {
-    const r = canvas.getBoundingClientRect();
-    const x = ev.clientX - r.left;
+  setHtmlIfPresent('market-legend', `<span><b>${escapeHtml(latest.symbol || 'BTC/USDT')}</b></span><span>O ${fmtPrice(latest.open)}</span><span>H ${fmtPrice(latest.high)}</span><span>L ${fmtPrice(latest.low)}</span><span>C ${fmtPrice(latest.close)}</span><span class="${signedClass(delta)}">${delta >= 0 ? '+' : ''}${fmtMoney(delta)} (${deltaPct >= 0 ? '+' : ''}${fmtPct(deltaPct)})</span>`);
+  const updateHover = x => {
     const idx = Math.max(0, Math.min(visibleRows.length - 1, Math.floor((x - padL) / Math.max(1, candleGap))));
-    canvas.__hoverIndex = idx;
+    stateUi.chartHoverIndex = idx;
     const c = visibleRows[idx];
-    setHtmlIfPresent('hover-ohlcv', `<strong>Cursor</strong><span>${new Date(c.openTimeMs).toLocaleString()}  O ${fmtPrice(c.open)}  H ${fmtPrice(c.high)}  L ${fmtPrice(c.low)}  C ${fmtPrice(c.close)}  Vol ${fmtMoney(c.volumeUsdt)}</span>`);
-    drawCandles(allRows);
+    setCandleDetails(c);
   };
+  setCandleDetails(hoverState != null && visibleRows[hoverState] ? visibleRows[hoverState] : latest);
+  const applyPanFromClientX = clientX => {
+    if (!(stateUi.chartDragState && stateUi.chartDragState.active)) return;
+    const dx = clientX - stateUi.chartDragState.startX;
+    const shift = Math.round(dx / Math.max(1, candleGap));
+    const maxOffset = Math.max(0, allRows.length - Math.max(30, Number(stateUi.candleLimit || DEFAULT_LIMITS[stateUi.timeframe] || 180)));
+    stateUi.panOffset = Math.max(0, Math.min(maxOffset, stateUi.chartDragState.startOffset + shift));
+    persistChartViewport();
+    scheduleChartDraw();
+  };
+  const stopMousePan = () => {
+    stateUi.chartDragState = null;
+    canvas.style.cursor = 'grab';
+  };
+  canvas.onmousedown = ev => {
+    if (ev.button !== 0) return;
+    stateUi.chartDragState = { active: true, startX: ev.clientX, startOffset: Number(stateUi.panOffset || 0) };
+    canvas.style.cursor = 'grabbing';
+    const move = moveEv => {
+      applyPanFromClientX(moveEv.clientX);
+      if (moveEv.cancelable) moveEv.preventDefault();
+    };
+    const up = () => {
+      window.removeEventListener('mousemove', move);
+      window.removeEventListener('mouseup', up);
+      stopMousePan();
+    };
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
+    ev.preventDefault();
+  };
+  canvas.onmouseup = stopMousePan;
   canvas.onmouseleave = () => {
-    canvas.__hoverIndex = null;
-    setHtmlIfPresent('hover-ohlcv', '<strong>Cursor</strong><span>Move over a candle</span>');
+    if (stateUi.chartDragState && stateUi.chartDragState.active) return;
+    canvas.style.cursor = 'grab';
+    stateUi.chartHoverIndex = null;
+    setCandleDetails(latest);
+    scheduleChartDraw();
+  };
+  canvas.onmousemove = ev => {
+    if (stateUi.chartDragState && stateUi.chartDragState.active) {
+      applyPanFromClientX(ev.clientX);
+      return;
+    }
+    const r = canvas.getBoundingClientRect();
+    updateHover(ev.clientX - r.left);
+    scheduleChartDraw();
+  };
+  canvas.onwheel = ev => {
+    ev.preventDefault();
+    const current = Math.max(30, Math.min(1000, Number(stateUi.candleLimit || DEFAULT_LIMITS[stateUi.timeframe] || 180)));
+    const step = Math.max(5, Math.round(current * 0.08));
+    const next = ev.deltaY < 0 ? Math.max(30, current - step) : Math.min(1000, current + step);
+    if (next === current) return;
+    stateUi.candleLimit = next;
+    const maxOffset = Math.max(0, allRows.length - next);
+    stateUi.panOffset = Math.max(0, Math.min(maxOffset, Number(stateUi.panOffset || 0)));
+    persistChartViewport();
+    scheduleChartDraw();
+  };
+  canvas.style.cursor = stateUi.chartDragState && stateUi.chartDragState.active ? 'grabbing' : 'grab';
+  if (canvas.style.touchAction !== 'none') {
+    canvas.style.touchAction = 'none';
+  }
+  canvas.ontouchstart = ev => {
+    const touch = ev.touches && ev.touches[0];
+    if (!touch) return;
+    stateUi.chartDragState = { active: true, startX: touch.clientX, startOffset: Number(stateUi.panOffset || 0) };
+  };
+  canvas.ontouchmove = ev => {
+    const touch = ev.touches && ev.touches[0];
+    if (!touch || !(stateUi.chartDragState && stateUi.chartDragState.active)) return;
+    const dx = touch.clientX - stateUi.chartDragState.startX;
+    const shift = Math.round(dx / Math.max(1, candleGap));
+    const maxOffset = Math.max(0, allRows.length - Math.max(30, Number(stateUi.candleLimit || DEFAULT_LIMITS[stateUi.timeframe] || 180)));
+    stateUi.panOffset = Math.max(0, Math.min(maxOffset, stateUi.chartDragState.startOffset + shift));
+    persistChartViewport();
+    scheduleChartDraw();
+    if (ev.cancelable) ev.preventDefault();
+  };
+  canvas.ontouchend = () => {
+    stateUi.chartDragState = null;
   };
 }
 

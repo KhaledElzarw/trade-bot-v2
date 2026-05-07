@@ -172,7 +172,7 @@ HTML = r'''<!doctype html>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Tradebot Live Dashboard</title>
-  <link rel="stylesheet" href="/static/dashboard.v1.css?v=8">
+  <link rel="stylesheet" href="/static/dashboard.v1.css?v=9">
 </head>
 <body>
 <div class="wrap">
@@ -219,16 +219,13 @@ HTML = r'''<!doctype html>
     </section>
 
     <section class="card chart-card" id="market-card" data-default-col="1" data-default-span="16">
-      <div class="card-head"><div class="chart-head-group"><h2>BTC/USD · 1H · INDEX</h2><div class="chart-price-pill" id="chart-price-pill"><span class="label">BTC Price</span><span>--</span></div></div><div class="card-actions"><span class="stream-status" id="chart-stream-status">seed</span><span id="chart-quote-line">--</span></div></div>
+      <div class="card-head"><div class="chart-head-group"><h2>BTC/USD · 1H · INDEX</h2><div class="chart-price-pill" id="chart-price-pill"><span class="label">BTC Price</span><span>--</span></div></div><div class="card-actions"><span class="stream-status" id="chart-stream-status">seed</span></div></div>
       <div class="card-body">
         <div class="legend" id="market-legend"></div>
         <div class="pillrow" id="timeframe-controls" style="margin-bottom:10px"></div>
+        <div class="candle-details" id="hover-ohlcv"><strong>Candle</strong><span>--</span></div>
         <div class="chart-wrap">
           <canvas id="market-chart"></canvas>
-          <div class="chart-overlay">
-            <div class="overlay-box" id="hover-ohlcv"><strong>Cursor</strong><span>Move over a candle</span></div>
-            <div class="overlay-box" id="latest-candle"><strong>Live candle</strong><span>--</span></div>
-          </div>
         </div>
       </div>
     </section>
@@ -347,7 +344,7 @@ HTML = r'''<!doctype html>
     </section>
   </div>
 </div>
-<script src="/static/dashboard.v1.js?v=8"></script>
+<script src="/static/dashboard.v1.js?v=9"></script>
 </body>
 </html>'''
 
@@ -1637,7 +1634,6 @@ def render_initial_dashboard_html(interval_override: str | None = None) -> str:
         'id="chart-price-pill"><span class="label">BTC Price</span><span>--</span></div>': f'id="chart-price-pill"><span class="label">BTC Price</span><span>{_fmt_num(price, 2)}</span></div>',
         '<div class="pillrow" id="timeframe-controls" style="margin-bottom:10px"></div>': f'<div class="pillrow" id="timeframe-controls" style="margin-bottom:10px">{timeframe_html}</div>',
         '<canvas id="market-chart"></canvas>': f'<canvas id="market-chart"></canvas>{_render_server_chart_svg(ohlcv, price)}',
-        'id="latest-candle"><strong>Live candle</strong><span>--</span></div>': f'id="latest-candle"><strong>Live candle</strong><span>C {_fmt_num(price, 2)}</span></div>',
         '<tbody id="events-body"></tbody>': f'<tbody id="events-body">{_render_server_events(events)}</tbody>',
         '<tbody id="orders-body"></tbody>': f'<tbody id="orders-body">{_render_server_orders(orders, price)}</tbody>',
         '<div class="config-grid" id="config-form-grid"></div>': f'<div class="config-grid" id="config-form-grid">{_render_server_config(state)}</div>',
