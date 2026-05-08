@@ -467,8 +467,11 @@ def test_gst_server_time_and_macro_calendar_update_daily():
     assert 'class="status-chip' not in upcoming_html
     assert 'class="calendar-icon-day">7</span>' in completed_html
     assert 'class="calendar-icon-month">May</span>' in completed_html
-    assert 'class="calendar-icon-delta">-0h30m</span>' in completed_html
+    assert 'class="calendar-icon-delta"' not in completed_html
+    assert "-0h30m" not in completed_html
     assert 'class="calendar-icon-delta">0h30m</span>' in upcoming_html
+    assert '<span class="calendar-meta">May 7, 2026' not in completed_html
+    assert '<span class="calendar-meta">May 7, 2026' not in upcoming_html
     assert dashboard_server._macro_calendar_delta_label(
         {"sortTs": datetime(2026, 5, 20, 13, 0, 0, tzinfo=timezone.utc).timestamp()},
         datetime(2026, 5, 7, 13, 0, 0, tzinfo=timezone.utc),

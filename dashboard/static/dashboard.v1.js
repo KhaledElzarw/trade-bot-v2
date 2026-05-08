@@ -1334,12 +1334,16 @@ function macroCalendarDeltaLabel(event, nowUtcMs) {
 
 function macroCalendarBadge(event, nowUtcMs) {
   const delta = macroCalendarDeltaLabel(event, nowUtcMs);
-  const title = `${event.date || ''} ${event.time || ''} - ${delta}`;
+  const titleBase = `${event.date || ''} ${event.time || ''}`;
+  const title = event.status === 'Upcoming' ? `${titleBase} - ${delta}` : titleBase;
+  const deltaHtml = event.status === 'Upcoming'
+    ? `<span class="calendar-icon-delta">${escapeHtml(delta)}</span>`
+    : '';
   return `
     <div class="calendar-icon" style="background:${escapeHtml(event.color || '#1767c2')}" title="${escapeHtml(title)}">
       <span class="calendar-icon-day">${escapeHtml(event.day || '')}</span>
       <span class="calendar-icon-month">${escapeHtml(event.monthName || '')}</span>
-      <span class="calendar-icon-delta">${escapeHtml(delta)}</span>
+      ${deltaHtml}
     </div>
   `;
 }
@@ -1371,7 +1375,6 @@ function renderMacroCalendar(serverTimeUtc) {
           <strong>${escapeHtml(ev.title)}</strong>
           <div class="calendar-summary">${escapeHtml(ev.status)} - ${escapeHtml(ev.summary)}</div>
         </div>
-        <span class="calendar-meta">${escapeHtml(ev.date)}<br>${escapeHtml(ev.time)}</span>
         <div class="calendar-impact"><div class="calendar-meta" style="margin-bottom:5px">Impact</div><div class="impact-dots">${Array.from({ length: 3 }, (_, i) => `<span class="${i < ev.impact ? 'on' : ''}"></span>`).join('')}</div></div>
       </div>
     `).join('');
