@@ -364,6 +364,9 @@
     .calendar-icon-day { font-size:2.05rem; line-height:.74; }
     .calendar-icon-month { font-size:.99rem; line-height:.78; text-transform:uppercase; }
     .calendar-icon-delta { position:absolute; left:0; right:0; bottom:3px; font-size:.62rem; line-height:.86; white-space:nowrap; }
+    .calendar-day-group.upcoming .calendar-icon {
+      display:grid; grid-auto-rows:max-content; align-content:center; justify-items:center; gap:1px; padding:0 4px;
+    }
     .calendar-main { min-width:0; display:flex; flex-direction:column; gap:5px; }
     .calendar-event-flag { white-space:nowrap; }
     .calendar-event-time { color:var(--muted); font-size:.76rem; font-weight:800; text-transform:uppercase; }
