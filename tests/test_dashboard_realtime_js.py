@@ -656,7 +656,7 @@ def test_ai_decisions_renderer_and_refresh_paths_are_safe(tmp_path):
     );
     assert.ok(
       elements.get('upcoming-macro-calendar').innerHTML.includes(
-        'Daily Close Risk Review <span class="calendar-event-flag" title="Global crypto close">🌐</span>',
+        'Daily Close Risk Review <span class="calendar-event-flag" title="Global crypto close">🇺🇳</span>',
       ),
     );
     assert.ok(elements.get('upcoming-macro-calendar').innerHTML.includes('calendar-icon-delta'));
@@ -1125,7 +1125,16 @@ def test_realtime_chart_bar_merge_semantics(tmp_path):
         equityUsdt: 500,
         btc: 0.001,
         position: { unrealizedPnlUsdt: 1.2 },
-        stats: { grid: {}, ai: { model: 'qwen', riskAction: 'pause_new_buys', confidence: 0.75, stale: true, source: 'expired_signal' } },
+        stats: {
+          grid: {},
+          ai: {
+            model: 'qwen',
+            riskAction: 'pause_new_buys',
+            confidence: 0.75,
+            stale: true,
+            source: 'expired_signal',
+          },
+        },
       },
       state: { aiEnabled: true, aiEndpointKey: 'custom' },
       runtime: {

@@ -471,7 +471,7 @@ def test_gst_server_time_and_macro_calendar_update_daily():
     ) in upcoming_html
     assert (
         'Daily Close Risk Review <span class="calendar-event-flag" '
-        'title="Global crypto close">🌐</span>'
+        'title="Global crypto close">🇺🇳</span>'
     ) in upcoming_html
     assert completed_html.count('class="calendar-day-group') == 2
     assert upcoming_html.count('class="calendar-day-group') == 2

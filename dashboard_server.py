@@ -132,7 +132,7 @@ MACRO_CALENDAR_TEMPLATE = [
         "color": "#13a7b4",
         "upcoming": "Review realized PnL, open exposure, and overnight grid risk.",
         "completed": "Daily risk review completed; carry only exposure justified by the regime.",
-        "geoFlag": "🌐",
+        "geoFlag": "🇺🇳",
         "geoLabel": "Global crypto close",
     },
 ]

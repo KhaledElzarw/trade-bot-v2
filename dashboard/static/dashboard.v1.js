@@ -25,7 +25,7 @@ const MACRO_CALENDAR_TEMPLATES = [
   ['Europe Macro / Yields Check', 12, 0, 2, '#f7931a', 'Watch EUR/US yields and risk appetite before the US data window.', 'Europe macro flow updated rate-pressure context for the active grid.', '🇪🇺', 'Europe'],
   ['US Data Window', 16, 30, 3, '#0d8a2f', 'Watch scheduled US releases and liquidity reaction around the event.', 'US data window passed; confirm whether volatility expanded or faded.', '🇺🇸', 'United States'],
   ['US Cash Open / ETF Flow', 17, 30, 3, '#d54545', 'Watch ETF flow, equity beta, and headline reaction during the cash open.', 'US cash open flow is in; reassess BTC trend pressure and exposure.', '🇺🇸', 'United States'],
-  ['Daily Close Risk Review', 23, 45, 2, '#13a7b4', 'Review realized PnL, open exposure, and overnight grid risk.', 'Daily risk review completed; carry only exposure justified by the regime.', '🌐', 'Global crypto close'],
+  ['Daily Close Risk Review', 23, 45, 2, '#13a7b4', 'Review realized PnL, open exposure, and overnight grid risk.', 'Daily risk review completed; carry only exposure justified by the regime.', '🇺🇳', 'Global crypto close'],
 ];
 const INITIAL_QUERY = new URLSearchParams(window.location.search);
 function normalizeInitialTimeframe(tf) { return TIMEFRAMES.includes(tf) ? tf : '1m'; }
