@@ -659,7 +659,7 @@ def test_ai_decisions_renderer_and_refresh_paths_are_safe(tmp_path):
         'Daily Close Risk Review <span class="calendar-event-flag" title="Global crypto close">🇺🇳</span>',
       ),
     );
-    assert.ok(elements.get('upcoming-macro-calendar').innerHTML.includes('calendar-icon-delta'));
+    assert.ok(!elements.get('upcoming-macro-calendar').innerHTML.includes('calendar-icon-delta'));
     assert.ok(elements.get('upcoming-macro-calendar').innerHTML.includes('0h30m'));
     assert.ok(elements.get('upcoming-macro-calendar').innerHTML.includes('5:30 PM GST (0h30m)'));
     assert.ok(!elements.get('upcoming-macro-calendar').innerHTML.includes('<span class="calendar-meta">May 7'));

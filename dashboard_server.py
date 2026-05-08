@@ -240,7 +240,7 @@ HTML = r'''<!doctype html>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Tradebot Live Dashboard</title>
-  <link rel="stylesheet" href="/static/dashboard.v1.css?v=23">
+  <link rel="stylesheet" href="/static/dashboard.v1.css?v=24">
 </head>
 <body>
 <div class="wrap">
@@ -471,7 +471,7 @@ HTML = r'''<!doctype html>
     </div>
   </div>
 </div>
-<script src="/static/dashboard.v1.js?v=23"></script>
+<script src="/static/dashboard.v1.js?v=24"></script>
 </body>
 </html>'''
 
@@ -1906,22 +1906,13 @@ def _macro_calendar_delta_label(event: dict, current: datetime) -> str:
 def _render_macro_calendar_badge(event: dict, current: datetime) -> str:
     day = html_lib.escape(str(event.get("day") or ""))
     month = html_lib.escape(str(event.get("monthName") or ""))
-    delta = html_lib.escape(_macro_calendar_delta_label(event, current))
     title_text = f'{event.get("date", "")} {event.get("time", "")}'
-    if event.get("status") == "Upcoming":
-        title_text = f"{title_text} - {delta}"
     title = html_lib.escape(title_text)
     color = html_lib.escape(str(event.get("color") or "#1767c2"))
-    delta_html = (
-        f'<span class="calendar-icon-delta">{delta}</span>'
-        if event.get("status") == "Upcoming"
-        else ""
-    )
     return (
         f'<div class="calendar-icon" style="background:{color}" title="{title}">'
         f'<span class="calendar-icon-day">{day}</span>'
         f'<span class="calendar-icon-month">{month}</span>'
-        f"{delta_html}"
         "</div>"
     )
 

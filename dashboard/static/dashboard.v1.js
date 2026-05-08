@@ -1482,17 +1482,11 @@ function macroCalendarDeltaLabel(event, nowUtcMs) {
 }
 
 function macroCalendarBadge(event, nowUtcMs) {
-  const delta = macroCalendarDeltaLabel(event, nowUtcMs);
   const titleBase = `${event.date || ''} ${event.time || ''}`;
-  const title = event.status === 'Upcoming' ? `${titleBase} - ${delta}` : titleBase;
-  const deltaHtml = event.status === 'Upcoming'
-    ? `<span class="calendar-icon-delta">${escapeHtml(delta)}</span>`
-    : '';
   return `
-    <div class="calendar-icon" style="background:${escapeHtml(event.color || '#1767c2')}" title="${escapeHtml(title)}">
+    <div class="calendar-icon" style="background:${escapeHtml(event.color || '#1767c2')}" title="${escapeHtml(titleBase)}">
       <span class="calendar-icon-day">${escapeHtml(event.day || '')}</span>
       <span class="calendar-icon-month">${escapeHtml(event.monthName || '')}</span>
-      ${deltaHtml}
     </div>
   `;
 }
