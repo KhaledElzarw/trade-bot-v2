@@ -77,6 +77,7 @@ NEWS_HISTORY_DAYS = 90
 NEWS_HISTORY_LIMIT = max(NEWS_PAGE_SIZE, int(os.getenv("TRADEBOT_DASHBOARD_NEWS_HISTORY_LIMIT", "250")))
 MACRO_CALENDAR_PAGE_SIZE = 10
 MACRO_CALENDAR_SIDE_SIZE = 5
+MACRO_CALENDAR_WINDOW_DAYS = 7
 MACRO_CALENDAR_LOOKBACK_MONTHS = 12
 MACRO_CALENDAR_LOOKAHEAD_MONTHS = 12
 MACRO_CALENDAR_TEMPLATE = [
@@ -239,7 +240,7 @@ HTML = r'''<!doctype html>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Tradebot Live Dashboard</title>
-  <link rel="stylesheet" href="/static/dashboard.v1.css?v=20">
+  <link rel="stylesheet" href="/static/dashboard.v1.css?v=21">
 </head>
 <body>
 <div class="wrap">
@@ -470,7 +471,7 @@ HTML = r'''<!doctype html>
     </div>
   </div>
 </div>
-<script src="/static/dashboard.v1.js?v=20"></script>
+<script src="/static/dashboard.v1.js?v=21"></script>
 </body>
 </html>'''
 
@@ -1829,19 +1830,20 @@ def _macro_calendar_status_page(
     events: list[dict],
     status: str,
     page: int = 0,
-    page_size: int = MACRO_CALENDAR_PAGE_SIZE,
+    window_days: int = MACRO_CALENDAR_WINDOW_DAYS,
 ) -> tuple[list[dict], int, int, int]:
-    status_label = "Completed" if status == "Completed" else "Upcoming"
-    rows_source = sorted(
-        [event for event in events if event.get("status") == status_label],
-        key=lambda event: float(event.get("sortTs") or 0),
-        reverse=status_label == "Completed",
+    page_groups, total_pages, page, total_events = _macro_calendar_grouped_status_page(
+        events,
+        status,
+        page,
+        window_days,
     )
-    total_events = len(rows_source)
-    total_pages = max(1, math.ceil(total_events / page_size))
-    page = max(0, min(total_pages - 1, int(page or 0)))
-    start = page * page_size
-    return rows_source[start:start + page_size], total_pages, page, total_events
+    rows = [
+        event
+        for group in page_groups
+        for event in group.get("events", [])
+    ]
+    return rows, total_pages, page, total_events
 
 
 def _macro_calendar_day_groups(rows: list[dict]) -> list[dict]:
@@ -1857,21 +1859,13 @@ def _macro_calendar_day_groups(rows: list[dict]) -> list[dict]:
 
 def _macro_calendar_group_pages(
     groups: list[dict],
-    page_size: int = MACRO_CALENDAR_PAGE_SIZE,
+    window_days: int = MACRO_CALENDAR_WINDOW_DAYS,
 ) -> list[list[dict]]:
-    pages: list[list[dict]] = []
-    page_groups: list[dict] = []
-    page_count = 0
-    for group in groups:
-        group_size = max(1, len(group.get("events") or []))
-        if page_groups and page_count + group_size > page_size:
-            pages.append(page_groups)
-            page_groups = []
-            page_count = 0
-        page_groups.append(group)
-        page_count += group_size
-    if page_groups:
-        pages.append(page_groups)
+    days_per_page = max(1, int(window_days or MACRO_CALENDAR_WINDOW_DAYS))
+    pages = [
+        groups[start:start + days_per_page]
+        for start in range(0, len(groups), days_per_page)
+    ]
     return pages or [[]]
 
 
@@ -1879,7 +1873,7 @@ def _macro_calendar_grouped_status_page(
     events: list[dict],
     status: str,
     page: int = 0,
-    page_size: int = MACRO_CALENDAR_PAGE_SIZE,
+    window_days: int = MACRO_CALENDAR_WINDOW_DAYS,
 ) -> tuple[list[dict], int, int, int]:
     status_label = "Completed" if status == "Completed" else "Upcoming"
     rows_source = sorted(
@@ -1890,7 +1884,7 @@ def _macro_calendar_grouped_status_page(
     total_events = len(rows_source)
     grouped_pages = _macro_calendar_group_pages(
         _macro_calendar_day_groups(rows_source),
-        page_size,
+        window_days,
     )
     total_pages = max(1, len(grouped_pages))
     page = max(0, min(total_pages - 1, int(page or 0)))

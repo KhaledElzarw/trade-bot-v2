@@ -12,8 +12,7 @@ const SERVER_TIME_ZONE = 'Asia/Dubai';
 const GST_OFFSET_MS = 4 * 60 * 60 * 1000;
 const NEWS_PAGE_SIZE = 5;
 const NEWS_HISTORY_DAYS = 90;
-const MACRO_CALENDAR_PAGE_SIZE = 10;
-const MACRO_CALENDAR_SIDE_SIZE = 5;
+const MACRO_CALENDAR_WINDOW_DAYS = 7;
 const MACRO_CALENDAR_LOOKBACK_MONTHS = 12;
 const MACRO_CALENDAR_LOOKAHEAD_MONTHS = 12;
 const MACRO_CALENDAR_KINDS = {
@@ -1349,15 +1348,12 @@ function sortedMacroCalendarRows(events, kind = 'completed') {
 }
 
 function macroCalendarPageRows(events, kind = 'completed', page = macroCalendarState(kind).page) {
-  const rowsSource = sortedMacroCalendarRows(events, kind);
-  const pages = Math.max(1, Math.ceil(rowsSource.length / MACRO_CALENDAR_PAGE_SIZE));
-  const pageIndex = Math.max(0, Math.min(pages - 1, Number(page || 0)));
-  const start = pageIndex * MACRO_CALENDAR_PAGE_SIZE;
+  const pageData = macroCalendarGroupedPageRows(events, kind, page);
   return {
-    rows: rowsSource.slice(start, start + MACRO_CALENDAR_PAGE_SIZE),
-    totalPages: pages,
-    page: pageIndex,
-    totalEvents: rowsSource.length,
+    rows: pageData.rows,
+    totalPages: pageData.totalPages,
+    page: pageData.page,
+    totalEvents: pageData.totalEvents,
   };
 }
 
@@ -1384,20 +1380,12 @@ function macroCalendarDayGroups(rows) {
 }
 
 function macroCalendarGroupPages(groups) {
+  const dayGroups = groups || [];
+  const daysPerPage = Math.max(1, Number(MACRO_CALENDAR_WINDOW_DAYS || 7));
   const pages = [];
-  let pageGroups = [];
-  let pageCount = 0;
-  (groups || []).forEach(group => {
-    const groupSize = Math.max(1, (group.events || []).length);
-    if (pageGroups.length && pageCount + groupSize > MACRO_CALENDAR_PAGE_SIZE) {
-      pages.push(pageGroups);
-      pageGroups = [];
-      pageCount = 0;
-    }
-    pageGroups.push(group);
-    pageCount += groupSize;
-  });
-  if (pageGroups.length) pages.push(pageGroups);
+  for (let start = 0; start < dayGroups.length; start += daysPerPage) {
+    pages.push(dayGroups.slice(start, start + daysPerPage));
+  }
   return pages.length ? pages : [[]];
 }
 

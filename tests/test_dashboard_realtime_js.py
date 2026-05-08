@@ -626,7 +626,7 @@ def test_ai_decisions_renderer_and_refresh_paths_are_safe(tmp_path):
     assert.ok(elements.get('completed-macro-calendar').innerHTML.includes('May 7'));
     assert.ok(elements.get('completed-macro-calendar').innerHTML.includes('Completed -'));
     assert.ok(!elements.get('completed-macro-calendar').innerHTML.includes('Upcoming -'));
-    assert.ok(!elements.get('completed-macro-calendar').innerHTML.includes('May 1'));
+    assert.ok(elements.get('completed-macro-calendar').innerHTML.includes('May 1'));
     assert.ok(elements.get('completed-macro-calendar').innerHTML.includes('calendar-icon-day'));
     assert.ok(elements.get('completed-macro-calendar').innerHTML.includes('calendar-icon-month'));
     assert.ok(elements.get('completed-macro-calendar').innerHTML.includes('calendar-day-group'));
@@ -666,26 +666,41 @@ def test_ai_decisions_renderer_and_refresh_paths_are_safe(tmp_path):
     assert.ok(!elements.get('upcoming-macro-calendar').innerHTML.includes('status-chip'));
     assert.strictEqual(
       (elements.get('completed-macro-calendar').innerHTML.match(/class="calendar-row/g) || []).length,
-      8,
+      33,
     );
     assert.strictEqual(
       (elements.get('upcoming-macro-calendar').innerHTML.match(/class="calendar-row/g) || []).length,
+      32,
+    );
+    assert.strictEqual(
+      (elements.get('completed-macro-calendar').innerHTML.match(/class="calendar-day-group/g) || []).length,
+      7,
+    );
+    assert.strictEqual(
+      (elements.get('upcoming-macro-calendar').innerHTML.match(/class="calendar-day-group/g) || []).length,
       7,
     );
     assert.ok(elements.get('completed-macro-page-indicator').textContent.includes('Page 1 /'));
     assert.ok(elements.get('upcoming-macro-page-indicator').textContent.includes('Page 1 /'));
     assert.ok(elements.get('completed-macro-year-filter').innerHTML.includes('2025'));
     assert.ok(elements.get('upcoming-macro-year-filter').innerHTML.includes('2027'));
+    const macroEvents = t.macroCalendarEvents('2026-05-07T13:00:00+00:00');
+    const completedMacroPage = t.macroCalendarPageRows(macroEvents, 'completed');
+    const upcomingMacroPage = t.macroCalendarPageRows(macroEvents, 'upcoming');
+    assert.strictEqual(completedMacroPage.rows.length, 33);
+    assert.strictEqual(upcomingMacroPage.rows.length, 32);
+    assert.ok(completedMacroPage.totalPages > 50);
+    assert.ok(upcomingMacroPage.totalPages > 50);
 
     (async () => {
       await assert.doesNotReject(async () => t.refresh());
       assert.ok(body.innerHTML.includes('refresh-row'));
       assert.ok(elements.get('server-time').textContent.includes('GST'));
       assert.ok(elements.get('completed-macro-calendar').innerHTML.includes('May 7'));
-      assert.ok(!elements.get('completed-macro-calendar').innerHTML.includes('May 1'));
+      assert.ok(elements.get('completed-macro-calendar').innerHTML.includes('May 1'));
       assert.strictEqual(
         (elements.get('completed-macro-calendar').innerHTML.match(/class="calendar-row/g) || []).length,
-        8,
+        33,
       );
       assert.doesNotThrow(() => t.changeMacroCalendarPage('completed', 'next'));
       assert.ok(elements.get('completed-macro-page-indicator').textContent.startsWith('Page 2 /'));
@@ -695,7 +710,7 @@ def test_ai_decisions_renderer_and_refresh_paths_are_safe(tmp_path):
       t.stateUi.macroCalendars.completed.page = 0;
       assert.doesNotThrow(() => t.renderMacroCalendar('2026-05-07T13:00:00+00:00'));
       const filteredCalendar = elements.get('completed-macro-calendar').innerHTML;
-      assert.strictEqual((filteredCalendar.match(/class="calendar-row/g) || []).length, 10);
+      assert.strictEqual((filteredCalendar.match(/class="calendar-row/g) || []).length, 7);
       assert.ok(filteredCalendar.includes('US Data Window'));
       assert.ok(!filteredCalendar.includes('Asia Liquidity Open'));
       assert.strictEqual(elements.get('config-modal').hidden, undefined);

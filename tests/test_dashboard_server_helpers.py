@@ -431,15 +431,33 @@ def test_gst_server_time_and_macro_calendar_update_daily():
     )
     assert completed_page == 0
     assert upcoming_page == 0
-    assert completed_pages > 150
-    assert upcoming_pages > 150
+    assert completed_pages > 50
+    assert upcoming_pages > 50
     assert completed_total + upcoming_total == len(events)
-    assert len(completed_rows) == 10
-    assert len(upcoming_rows) == 10
+    assert len(completed_rows) == 33
+    assert len(upcoming_rows) == 32
     assert {event["status"] for event in completed_rows} == {"Completed"}
     assert {event["status"] for event in upcoming_rows} == {"Upcoming"}
     assert completed_rows[0]["sortTs"] > completed_rows[1]["sortTs"]
     assert upcoming_rows[0]["sortTs"] < upcoming_rows[1]["sortTs"]
+    assert {(event["month"], event["day"]) for event in completed_rows} == {
+        (5, 1),
+        (5, 2),
+        (5, 3),
+        (5, 4),
+        (5, 5),
+        (5, 6),
+        (5, 7),
+    }
+    assert {(event["month"], event["day"]) for event in upcoming_rows} == {
+        (5, 7),
+        (5, 8),
+        (5, 9),
+        (5, 10),
+        (5, 11),
+        (5, 12),
+        (5, 13),
+    }
 
     completed_html = dashboard_server._render_macro_calendar(
         "Completed",
@@ -473,14 +491,15 @@ def test_gst_server_time_and_macro_calendar_update_daily():
         'Daily Close Risk Review <span class="calendar-event-flag" '
         'title="Global crypto close">🇺🇳</span>'
     ) in upcoming_html
-    assert completed_html.count('class="calendar-day-group') == 2
-    assert upcoming_html.count('class="calendar-day-group') == 2
-    assert completed_html.count('class="calendar-row') == 8
-    assert upcoming_html.count('class="calendar-row') == 7
+    assert completed_html.count('class="calendar-day-group') == 7
+    assert upcoming_html.count('class="calendar-day-group') == 7
+    assert completed_html.count('class="calendar-row') == 33
+    assert upcoming_html.count('class="calendar-row') == 32
     assert 'class="status-chip' not in completed_html
     assert 'class="status-chip' not in upcoming_html
     assert completed_html.count('class="calendar-icon-day">7</span>') == 1
     assert 'class="calendar-icon-day">6</span>' in completed_html
+    assert 'class="calendar-icon-day">1</span>' in completed_html
     assert 'class="calendar-icon-month">May</span>' in completed_html
     assert 'class="calendar-icon-delta"' not in completed_html
     assert "-0h30m" not in completed_html
