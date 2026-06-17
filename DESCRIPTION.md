@@ -1,0 +1,1 @@
+AI-assisted local product prototype for paper/testnet workflow automation, dashboard operations, SQLite persistence, runtime monitoring, security controls and optional advisory AI review.
