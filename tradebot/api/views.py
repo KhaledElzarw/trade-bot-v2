@@ -21,6 +21,17 @@ from ..application.portfolio import (
 )
 
 
+def money(value: Decimal) -> str:
+    """Plain decimal string for the API/UI.
+
+    `str(Decimal("0E-8"))` renders as ``0E-8`` — scientific notation that is
+    meaningless in a balance column. Normalizing through a fixed-point format
+    keeps the exact value while emitting ``0.00000000``.
+    """
+
+    return f"{value:f}"
+
+
 class PortfolioView(Protocol):  # pragma: no cover - structural protocol
     def readiness(self) -> dict: ...
     def portfolio_summary(self) -> dict: ...
@@ -90,19 +101,19 @@ class InMemoryPortfolioView:
         active_equity = self.portfolio.active_equity(self.mark_price)
         return {
             "active": {
-                "starting_capital": str(ACTIVE_BASELINE),
-                "current_equity": str(active_equity),
-                "net_pnl": str(active_equity - ACTIVE_BASELINE),
-                "archived_lifetime_net_pnl": str(self.archived_lifetime_pnl),
+                "starting_capital": money(ACTIVE_BASELINE),
+                "current_equity": money(active_equity),
+                "net_pnl": money(active_equity - ACTIVE_BASELINE),
+                "archived_lifetime_net_pnl": money(self.archived_lifetime_pnl),
                 "wallet_count": len(self.portfolio.active),
             },
             "shadow": {
-                "virtual_equity": str(self.portfolio.shadow_equity(self.mark_price)),
+                "virtual_equity": money(self.portfolio.shadow_equity(self.mark_price)),
                 "wallet_count": len(self.portfolio.shadow),
                 "note": "virtual evaluation capital; excluded from active totals",
             },
             "dark_horse": self._dark_horse_summary(),
-            "mark_price": str(self.mark_price),
+            "mark_price": money(self.mark_price),
         }
 
     def _dark_horse_summary(self) -> dict | None:
@@ -113,8 +124,8 @@ class InMemoryPortfolioView:
         return {
             "wallet_id": slot.wallet.wallet_id,
             "display_name": display_name(slot, self.now),
-            "current_equity": str(equity),
-            "lifetime_net_pnl": str(equity - Decimal("10000.00")),
+            "current_equity": money(equity),
+            "lifetime_net_pnl": money(equity - Decimal("10000.00")),
         }
 
     # -- wallets -------------------------------------------------------------
@@ -138,11 +149,11 @@ class InMemoryPortfolioView:
             "days_since_assignment_changed": max(
                 0, (self.now - slot.activated_at).days),
             "starting_equity": "10000.00",
-            "current_equity": str(equity),
-            "lifetime_net_pnl": str(equity - Decimal("10000.00")),
-            "btc_quantity": str(w.base_qty),
-            "usdt_quantity": str(w.quote_cash),
-            "realized_pnl": str(w.realized_pnl),
+            "current_equity": money(equity),
+            "lifetime_net_pnl": money(equity - Decimal("10000.00")),
+            "btc_quantity": money(w.base_qty),
+            "usdt_quantity": money(w.quote_cash),
+            "realized_pnl": money(w.realized_pnl),
             "status": "active",
             "health": "ok",
         }

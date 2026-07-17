@@ -9,10 +9,12 @@ allowlist — those are operator-controlled configuration (A09).
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Annotated, Callable
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from .security import (
     SECURITY_HEADERS,
@@ -103,6 +105,18 @@ def create_app(view: PortfolioView, settings: ApiSettings | None = None) -> Fast
 
 def _register_routes(app: FastAPI, view: PortfolioView, require_token) -> None:
     guarded = [Depends(require_token)]
+
+    # -- dashboard shell + assets --------------------------------------------
+    # Served from our own origin so the CSP's `script-src 'self'` is satisfied
+    # without inline script. StaticFiles is read-only and cannot be mutated
+    # through the API.
+    static_dir = Path(__file__).resolve().parents[2] / "dashboard" / "static"
+    if static_dir.is_dir():
+        app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+
+        @app.get("/", include_in_schema=False)
+        def dashboard() -> FileResponse:
+            return FileResponse(static_dir / "index.html")
 
     @app.get("/api/v2/system/health")
     def health() -> dict:

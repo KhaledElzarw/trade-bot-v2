@@ -1,0 +1,131 @@
+/* Multi-wallet dashboard styling.
+   Accessibility: visible focus, sufficient contrast, reduced-motion support.
+   No external fonts or assets (the CSP forbids third-party origins). */
+
+:root {
+  --bg: #0e1117;
+  --panel: #161b22;
+  --panel-2: #1c2230;
+  --border: #2b3444;
+  --text: #e6edf3;
+  --muted: #97a3b6;
+  --accent: #4da3ff;
+  --good: #3fb950;
+  --bad: #f85149;
+  --warn: #d29922;
+  --shadow-tint: #7c5cff;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #f6f8fa; --panel: #fff; --panel-2: #f0f3f6; --border: #d0d7de;
+    --text: #1f2328; --muted: #57606a; --accent: #0969da;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  padding: 0 1rem 3rem;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+.skip-link {
+  position: absolute; left: -9999px;
+}
+.skip-link:focus {
+  left: 1rem; top: 1rem; z-index: 10;
+  background: var(--accent); color: #fff; padding: .5rem .75rem; border-radius: 6px;
+}
+
+.masthead { max-width: 1200px; margin: 0 auto; padding: 1.5rem 0 .5rem; }
+.masthead h1 { margin: 0; font-size: 1.4rem; letter-spacing: -0.01em; }
+.subtitle { margin: .25rem 0 0; color: var(--muted); font-size: .875rem; }
+
+main { max-width: 1200px; margin: 0 auto; }
+
+h2 { font-size: 1rem; margin: 1.5rem 0 .5rem; }
+
+/* -- summary ------------------------------------------------------------- */
+
+.summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: .75rem;
+  margin-top: 1rem;
+}
+
+.summary {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: .9rem 1rem;
+}
+.summary h2 { margin: 0 0 .6rem; font-size: .8rem; text-transform: uppercase;
+  letter-spacing: .06em; color: var(--muted); }
+
+/* Shadow capital is visually separated so it is never read as active money. */
+.summary--shadow { border-left: 3px solid var(--shadow-tint); }
+.summary--active { border-left: 3px solid var(--accent); }
+.summary--darkhorse { border-left: 3px solid var(--warn); }
+
+.metric { display: flex; justify-content: space-between; gap: 1rem; padding: .2rem 0; }
+.metric__label { color: var(--muted); font-size: .85rem; }
+.metric__value { font-variant-numeric: tabular-nums; font-weight: 600; }
+
+.note { color: var(--muted); font-size: .78rem; margin: .5rem 0 0; }
+
+/* -- filters ------------------------------------------------------------- */
+
+.filters { display: flex; flex-wrap: wrap; gap: .4rem; margin-bottom: .75rem; }
+
+.filter {
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: .35rem .8rem;
+  font: inherit;
+  font-size: .85rem;
+  cursor: pointer;
+}
+.filter:hover { border-color: var(--accent); }
+.filter[aria-pressed="true"] {
+  background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600;
+}
+.filter:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* -- table --------------------------------------------------------------- */
+
+.table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 10px; }
+
+table.wallets { border-collapse: collapse; width: 100%; font-size: .85rem; }
+table.wallets caption {
+  text-align: left; padding: .6rem .75rem; color: var(--muted); font-size: .8rem;
+}
+table.wallets th, table.wallets td {
+  padding: .5rem .75rem; text-align: left; border-top: 1px solid var(--border);
+  white-space: nowrap;
+}
+table.wallets thead th {
+  background: var(--panel-2); color: var(--muted); font-weight: 600;
+  font-size: .75rem; text-transform: uppercase; letter-spacing: .04em;
+  position: sticky; top: 0;
+}
+table.wallets tbody tr:hover { background: var(--panel-2); }
+table.wallets td { font-variant-numeric: tabular-nums; }
+
+/* -- states -------------------------------------------------------------- */
+
+.state { padding: 1rem; margin: 0; color: var(--muted); font-size: .9rem; }
+.state--error { color: var(--bad); }
+.state--stale, .state--degraded { color: var(--warn); }
+
+.foot { max-width: 1200px; margin: 2rem auto 0; color: var(--muted); font-size: .75rem; }
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
+}

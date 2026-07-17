@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>tradebot — multi-wallet portfolio</title>
+  <link rel="stylesheet" href="/static/dashboard.v2.css">
+</head>
+<body>
+  <a class="skip-link" href="#wallets">Skip to wallet table</a>
+
+  <header class="masthead">
+    <h1>Evolutionary Multi-Wallet Portfolio</h1>
+    <p class="subtitle">BTCUSDT paper trading — research simulator. No real orders are placed.</p>
+  </header>
+
+  <main>
+    <section id="summary" aria-label="Portfolio summary" class="summary-grid">
+      <!-- populated by dashboard.v2.js via textContent -->
+    </section>
+
+    <section aria-labelledby="wallets-heading">
+      <h2 id="wallets-heading">Wallets</h2>
+      <div id="filters"></div>
+      <div id="wallets" class="table-wrap"></div>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <p>Paper-trading research platform. Nothing here is a profitability claim or investment advice.</p>
+  </footer>
+
+  <script src="/static/dashboard.v2.js"></script>
+</body>
+</html>
