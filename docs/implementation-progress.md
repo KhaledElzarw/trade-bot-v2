@@ -53,7 +53,7 @@ when its acceptance gate passes with recorded command output.
   pre-existing failures**.
 | 5 | Plugin SDK & isolation | **Done** | `domain/strategies.py` SDK; `plugins/{validator,worker,worker_main,registry}.py`; `docs/strategy-plugin-sdk.md`; 19 tests (AST policy, traversal/symlink/size limits, real subprocess timeout kill, env-sanitization leak probe, quarantine) |
 | 6 | Initial 12 strategies & shadow pool | **Done** | `tradebot/strategies/` (12 modules + indicators + base); `application/portfolio.py`; 90 tests incl. 25-wallet deterministic replay, bit-reproducibility, active/shadow fairness, naming rule, 130k/120k split |
-| 7 | DataBroker & local llama.cpp client | Not started | — |
+| 7 | DataBroker & local llama.cpp client | **Done** | `infrastructure/data_broker/{policy,client}.py`, `infrastructure/llm/llama_cpp_client.py`; `docs/data-broker.md`; 32 tests (allowlist, SSRF/rebinding/redirect/userinfo/port/mime/size, sanitization, schema-repair, degrade-not-raise) |
 | 8 | Daily & weekly learning | Not started | — |
 | 9 | Evolution, novelty & promotion | **Rules + atomic promotion done; novelty/lineage pending** | `domain/evaluations.py`, `application/{evolution,liquidation,promotion}.py`; `docs/evolution-policy.md`; 34 tests (all replacement scenarios, ban reuse, roll-forward, shortage rollback, invariants) |
 | 10 | Dark Horse | Not started | — |
