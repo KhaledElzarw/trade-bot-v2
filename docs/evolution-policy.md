@@ -62,3 +62,45 @@ ids, non-negative balances.
 Poor shadow performance does **not** block promotion: a technically valid
 candidate may be promoted despite negative profitability (product rule 14).
 Technically invalid code may **never** be promoted (product rule 15/22).
+
+## Novelty (`novelty-policy-v1`)
+
+One versioned policy object holds every threshold — they are not hardcoded
+across the codebase.
+
+| Threshold | Default |
+|-----------|---------|
+| Novel max structural similarity | 0.65 |
+| Novel max \|signal correlation\| | 0.75 |
+| Max trade-entry overlap | 0.75 |
+| Mutation structural similarity band | 0.65 – 0.95 |
+
+The canonical fingerprint is derived from the strategy **source via AST**:
+indicator families, required timeframes, entry-condition structure,
+exit-condition structure, position-sizing method, stop/trailing method,
+holding-period behaviour, order types, state-machine keys, normalized parameter
+families, and conceptual family. Similarity is the mean Jaccard overlap across
+those dimensions plus the family match.
+
+Novel-candidate checks: distinct code hash, distinct structural fingerprint, not
+banned, structural similarity below threshold, |signal correlation| below
+threshold, trade-entry overlap below threshold. **The model's own claim of
+novelty is never accepted as evidence** — only the computed fingerprint counts.
+A banned *fingerprint* blocks a reskinned clone even when the code hash differs.
+
+Mutation checks: parent is an eligible **surviving** top performer (an
+eliminated strategy can never be a parent), relationship and description stored,
+not an exact clone of the parent, and similarity inside the 0.65–0.95 band
+(recognizably related but meaningfully changed).
+
+All twelve built-ins are verified pairwise below the novel similarity threshold
+by `test_builtins_are_structurally_dissimilar_pairwise` — they are materially
+distinct under this same policy, not merely by assertion.
+
+## Lineage
+
+Permanent parent/child graph with relationship (`novel`, `mutation`,
+`dark_horse_upgrade`) and a required mutation description. Generation = ancestor
+depth (novel root = 0); ancestry walking is cycle-safe. Lineage and bans are
+evidence retained indefinitely: an eliminated version remains in the graph as a
+permanent record even though its code hash may never be reactivated.

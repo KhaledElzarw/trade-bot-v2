@@ -55,7 +55,7 @@ when its acceptance gate passes with recorded command output.
 | 6 | Initial 12 strategies & shadow pool | **Done** | `tradebot/strategies/` (12 modules + indicators + base); `application/portfolio.py`; 90 tests incl. 25-wallet deterministic replay, bit-reproducibility, active/shadow fairness, naming rule, 130k/120k split |
 | 7 | DataBroker & local llama.cpp client | **Done** | `infrastructure/data_broker/{policy,client}.py`, `infrastructure/llm/llama_cpp_client.py`; `docs/data-broker.md`; 32 tests (allowlist, SSRF/rebinding/redirect/userinfo/port/mime/size, sanitization, schema-repair, degrade-not-raise) |
 | 8 | Daily & weekly learning | Not started | — |
-| 9 | Evolution, novelty & promotion | **Rules + atomic promotion done; novelty/lineage pending** | `domain/evaluations.py`, `application/{evolution,liquidation,promotion}.py`; `docs/evolution-policy.md`; 34 tests (all replacement scenarios, ban reuse, roll-forward, shortage rollback, invariants) |
+| 9 | Evolution, novelty & promotion | **Done** | `domain/{evaluations,lineage}.py`, `application/{evolution,liquidation,promotion,novelty}.py`; `docs/evolution-policy.md`; 55 tests (all replacement scenarios, ban reuse, roll-forward, shortage rollback, invariants, AST fingerprinting, novelty/mutation thresholds, lineage graph) |
 | 10 | Dark Horse | Not started | — |
 | 11 | API & dashboard rewrite | Not started | — |
 | 12 | Operations, observability & CI | Not started | — |
@@ -70,3 +70,22 @@ when its acceptance gate passes with recorded command output.
 ## Notes
 - No production source modified during Phase 0.
 - venv created at `.venv` (untracked) for validation only.
+
+### Phase 9b (novelty & lineage) — evidence (actual)
+- AST structural fingerprint over 11 spec dimensions + conceptual family; one
+  versioned `NoveltyPolicy` (`novelty-policy-v1`) holds every threshold.
+- **All 12 built-ins verified pairwise below the 0.65 novel similarity threshold**
+  (`test_builtins_are_structurally_dissimilar_pairwise`) and have 12 distinct
+  fingerprint digests — distinctness proven under the policy, not asserted.
+- Novel checks: duplicate hash, duplicate fingerprint, ban (hash *and*
+  fingerprint — a reskinned clone with a new hash is still blocked), structural
+  similarity, |signal correlation| (inverted clone caught), trade-entry overlap.
+- Model's novelty claim explicitly not accepted as evidence
+  (`test_model_claim_of_novelty_is_not_accepted_as_evidence`).
+- Mutation checks: ineligible/eliminated parent rejected, identical-to-parent
+  rejected, unrelated-to-parent rejected, missing description rejected, valid
+  mutation accepted inside the 0.65-0.95 band.
+- Lineage: ancestry/generation/children, invalid-edge rejection, cycle-safe walk,
+  lineage survives elimination as permanent evidence.
+- 21 new tests. New-package suite **210 passed**; ruff clean; full suite
+  **613 passed / same 11 pre-existing failures**.
