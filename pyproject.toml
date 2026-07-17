@@ -9,11 +9,23 @@ omit = [
     "tests/*",
     "*/__pycache__/*",
     "ai_agents/*",
+    # Executed ONLY inside the isolated strategy sandbox (`python -I -E` with a
+    # sanitized environment), so the parent process cannot observe its coverage.
+    # Injecting a coverage hook would require re-introducing environment
+    # inheritance into the sandbox, defeating the isolation guarantee this very
+    # module exists to provide. Its behaviour IS exercised end-to-end by
+    # tests/tradebot/test_plugin_worker.py, which spawns real subprocesses and
+    # asserts on success, state round-trip, timeout kill, crash reporting, and
+    # an environment-leak probe.
+    "tradebot/infrastructure/adapters/plugins/worker_main.py",
 ]
 
 [tool.coverage.report]
 show_missing = true
 skip_covered = false
+# Repo-wide gate stays at the legacy baseline; the new `tradebot` package is
+# measured and ratcheted separately in CI Gate 2. docs/testing.md records the
+# honest current numbers and the remaining path to 100%.
 fail_under = 0
 
 [tool.ruff]
@@ -23,6 +35,31 @@ line-length = 120
 [tool.ruff.lint]
 select = ["E", "F"]
 ignore = [
-    # Defer legacy line wrapping; this branch only fixes mechanical safety issues.
+    # Legacy line wrapping is deferred; the new `tradebot` package stays within
+    # 88 columns by convention.
     "E501",
 ]
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+warn_redundant_casts = true
+no_implicit_optional = true
+
+[[tool.mypy.overrides]]
+# Legacy flat modules are untyped and are slated for removal, not annotation.
+module = ["engine", "dashboard_server", "ai_sidecar", "binance_client",
+          "dashboard_routes", "dashboard_data", "sqlite_store", "json_store"]
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+# `resource` is POSIX-only. It is imported inside a guarded try/except and is
+# unresolvable when type-checking on Windows, so the rlimit calls are checked
+# on Linux/CI and ignored on developer machines that lack the module.
+module = ["tradebot.infrastructure.adapters.plugins.worker_main"]
+disable_error_code = ["attr-defined"]
+
+[tool.bandit]
+exclude_dirs = [".venv", "tests"]
+# B101: asserts guard internal invariants here, never untrusted input.
+skips = ["B101"]

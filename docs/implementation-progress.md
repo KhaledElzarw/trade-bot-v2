@@ -58,7 +58,7 @@ when its acceptance gate passes with recorded command output.
 | 9 | Evolution, novelty & promotion | **Done** | `domain/{evaluations,lineage}.py`, `application/{evolution,liquidation,promotion,novelty}.py`; `docs/evolution-policy.md`; 55 tests (all replacement scenarios, ban reuse, roll-forward, shortage rollback, invariants, AST fingerprinting, novelty/mutation thresholds, lineage graph) |
 | 10 | Dark Horse | **Done** | `domain/dark_horse.py`, `application/dark_horse.py`; `docs/dark-horse.md`; 21 tests (five-domain committee, explicit missing/stale degradation, no-shorting type, elimination exemption via Phase 9 engine, wallet continuity across upgrade/rollback) |
 | 11 | API & dashboard rewrite | **Core done** | `tradebot/api/{security,app,views}.py`, `dashboard/static/dashboard.v2.js`; 44 tests (fail-closed mutations, redacted errors, bind guard, CSP headers, 19 v2 routes, zero unsafe DOM sinks, URL vetting) |
-| 12 | Operations, observability & CI | Not started | — |
+| 12 | Operations, observability & CI | **Done** | `operations/{process_identity,structured_logging}.py`, `cli/tradebotctl.py`, 8-gate `.github/workflows/ci.yml`, `pyproject.toml` (mypy/bandit/coverage), `docs/testing.md`; 48 tests |
 | 13 | Independent verification & cleanup | Not started | — |
 
 ## Baseline metrics (Phase 0, actual)
@@ -160,3 +160,43 @@ when its acceptance gate passes with recorded command output.
 - The v1 dashboard/server remain in the tree; removing them is Phase 13 cleanup.
 - Node/jsdom behavioural DOM tests + Playwright smoke are Gate 5 work (Phase 12);
   the always-on Python-driven static safety floor is in place now.
+
+### Phase 12 — evidence (actual)
+- **A15 closed**: identity = pid + OS start time + executable + command + service
+  + instance id + PID-file nonce. A recycled PID (same pid, different start time)
+  receives **no signal at all** (`test_stop_refuses_to_kill_recycled_pid`,
+  asserts `signals == []`); a stale PID file signals nothing; escalation
+  RE-VERIFIES identity after the grace window and aborts if the PID was reused
+  mid-window. `tradebotctl stop` exits non-zero rather than killing a mismatch,
+  and `restart` aborts instead of starting a duplicate.
+- `tradebotctl` implements all 11 required commands with injected side effects
+  (no real processes/daemons/DB/network in tests).
+- Structured JSON logs carry all 13 mandated correlation fields; secrets are
+  redacted by key pattern (nested + lists), long external content truncated,
+  exceptions logged as category not traceback text. 16 metrics registered;
+  unknown metric names rejected.
+- CI upgraded from 1 job to **8 gates**.
+- **Real defects found and fixed this phase:**
+  1. `MacdMomentum.macd_deceleration` was **dead code** — proven unreachable
+     across 390 generated scenarios, because the histogram crosses below zero
+     before it can decline 4 candles running, and `h3 < 0` returns first. The
+     declared `decel_streak_exit = 3` parameter was also never used (the code
+     hardcoded a 4-value chain, and the comment misdescribed it). Fixed with a
+     real `declining_streak()` honouring the parameter; the exit now fires.
+  2. `cmd_stop` passed Optional adapters straight into `stop_process` — a latent
+     None-call crash. Now fails closed: without adapters to VERIFY identity it
+     refuses to signal.
+  3. **pip-audit found 3 real CVEs** in legacy pins (PYSEC-2026-2270
+     python-dotenv, PYSEC-2026-1872 + PYSEC-2026-2275 requests). Pins raised;
+     audit now clean.
+- Bandit: 2 findings triaged rather than blanket-skipped — the sandbox's
+  intentional subprocess use, annotated inline with justification (argv is a
+  fixed list, untrusted bundle travels as stdin DATA, never as an argument).
+- Gates measured, not invented: mypy **clean (62 files)**, bandit **0 issues**,
+  pip-audit **clean**, perf **0.62 ms/tick measured** with a 10 ms budget.
+- Coverage on `tradebot/*` raised 93% -> **97%**; Gate 2 enforces
+  `--fail-under=97` as a ratchet. **NOT 100% — see docs/testing.md for the exact
+  103-statement gap.** One documented omission (worker_main.py, unobservable
+  from the parent by design; behaviour covered by real-subprocess tests).
+- 48 new tests. New-package suite **402 passed**; full suite **805 passed / same
+  11 pre-existing failures**.

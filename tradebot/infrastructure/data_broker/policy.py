@@ -97,7 +97,8 @@ def default_resolver(host: str) -> list[str]:  # pragma: no cover - real DNS
     import socket
 
     infos = socket.getaddrinfo(host, None)
-    return [info[4][0] for info in infos]
+    # sockaddr[0] is the address for both AF_INET and AF_INET6.
+    return [str(info[4][0]) for info in infos]
 
 
 def validate_request(
@@ -140,7 +141,7 @@ def validate_request(
 
     # DNS resolution + private-range block (defeats rebinding). The local llm
     # host is the sole allowed private destination.
-    resolved = resolver(host)
+    resolved: list[str] = [str(ip) for ip in resolver(host)]
     if not resolved:
         raise PolicyViolation(f"could not resolve {host}")
     for ip_str in resolved:

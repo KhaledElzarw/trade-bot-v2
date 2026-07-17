@@ -28,8 +28,9 @@ if str(_REPO_ROOT) not in sys.path:
 
 def _apply_rlimits(cpu_seconds: int, memory_bytes: int) -> None:
     try:
-        import resource
-    except ImportError:  # Windows — parent timeout is the backstop.
+        # POSIX-only; on Windows the parent's wall-clock timeout is the backstop.
+        import resource  # type: ignore[import-not-found,unused-ignore]
+    except ImportError:
         return
     resource.setrlimit(resource.RLIMIT_CPU, (cpu_seconds, cpu_seconds))
     resource.setrlimit(resource.RLIMIT_AS, (memory_bytes, memory_bytes))

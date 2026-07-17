@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
+import subprocess  # nosec B404 - launching the sandbox IS this module's purpose
 import sys
 import tempfile
 from dataclasses import dataclass
@@ -93,7 +93,11 @@ def run_strategy_in_worker(
             if value is not None:
                 env[os_var] = value
         try:
-            proc = subprocess.run(
+            # nosec B603 - argv is a fixed list (no shell, no untrusted input):
+            # `exe` is our own interpreter and `_WORKER_MAIN` is a constant path
+            # inside this package. The untrusted bundle is passed as DATA on
+            # stdin, never as an argument, and has already passed AST validation.
+            proc = subprocess.run(  # nosec B603
                 [exe, "-I", "-E", str(_WORKER_MAIN)],
                 input=request,
                 capture_output=True,

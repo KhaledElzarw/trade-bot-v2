@@ -20,8 +20,24 @@ class MacdMomentum(BuiltinStrategy):
     name = "MacdMomentum"
     family = "macd_momentum"
     min_warmup = 60
-    decel_streak_exit = 3
+    # Consecutive shrinking-histogram candles that end a still-positive trade.
+    # Kept at 2: the histogram crosses below zero within ~3 candles of momentum
+    # peaking, so a longer streak would always be pre-empted by the negative
+    # cross below and the deceleration exit could never fire.
+    decel_streak_exit = 2
     max_hold = 60
+
+    @staticmethod
+    def declining_streak(hist: list[Decimal]) -> int:
+        """Count consecutive shrinking histogram values, newest first."""
+
+        streak = 0
+        for i in range(len(hist) - 1, 0, -1):
+            if hist[i] < hist[i - 1]:
+                streak += 1
+            else:
+                break
+        return streak
 
     def signal(self, context: StrategyContext,
                candles: tuple[MarketSnapshot, ...],
@@ -29,7 +45,7 @@ class MacdMomentum(BuiltinStrategy):
         hist = macd_histogram(closes(candles))
         if len(hist) < 4:
             return []
-        h0, h1, h2, h3 = hist[-4], hist[-3], hist[-2], hist[-1]
+        h1, h2, h3 = hist[-3], hist[-2], hist[-1]
 
         if not holding:
             crossed_positive = h2 <= 0 < h3
@@ -41,8 +57,8 @@ class MacdMomentum(BuiltinStrategy):
 
         if h3 < 0:
             return [self.sell_all_intent(context, "macd_negative_cross")]
-        if h3 < h2 < h1 < h0:
-            # Deceleration for `decel_streak_exit` consecutive candles.
+        if self.declining_streak(hist) >= self.decel_streak_exit:
+            # Momentum fading while still positive: exit before the cross.
             return [self.sell_all_intent(context, "macd_deceleration")]
         if state.get("candles_held", 0) >= self.max_hold:
             return [self.sell_all_intent(context, "max_hold")]
