@@ -103,16 +103,63 @@ def build_view(now: dt.datetime) -> InMemoryPortfolioView:
     print(f"[devserver] mark price {mark}  active equity "
           f"{portfolio.active_equity(mark)}  shadow {portfolio.shadow_equity(mark)}")
 
+    llm_healthy, llm_model = probe_local_llm()
+
     return InMemoryPortfolioView(
         portfolio=portfolio, mark_price=mark, now=now,
         archived_lifetime_pnl=Decimal("0.00"),
-        llm_healthy=False,  # honest: no local model is running in this harness
-        llm_model_id="unavailable",
+        llm_healthy=llm_healthy,
+        llm_model_id=llm_model,
         source_status=[
             {"source_id": "binance_public", "status": "not_contacted",
              "note": "dev harness uses a synthetic market; no network calls"},
+            {"source_id": "llama_cpp", "status": "ok" if llm_healthy else "degraded",
+             "note": f"local model: {llm_model}"},
         ],
     )
+
+
+def probe_local_llm() -> tuple[bool, str]:
+    """Live health + model discovery against the configured llama.cpp host.
+
+    Goes through the real LlamaCppClient over an httpx transport that is
+    constrained to the DataBroker's single permitted private destination. If the
+    model is down we report it as degraded rather than pretending.
+    """
+
+    import httpx
+
+    from ..infrastructure.data_broker.policy import PolicyViolation, validate_request
+    from ..infrastructure.llm.llama_cpp_client import LlamaCppClient, LlmConfig
+
+    config = LlmConfig()
+
+    class HttpxTransport:
+        """Every URL is revalidated against the allowlist before it is sent."""
+
+        def get(self, url: str) -> tuple[int, dict]:
+            validate_request(url, "GET", resolver=lambda h: [h])
+            r = httpx.get(url, timeout=5.0)
+            return r.status_code, (r.json() if r.content else {})
+
+        def post(self, url: str, payload: dict) -> tuple[int, dict]:
+            validate_request(url, "POST", resolver=lambda h: [h])
+            r = httpx.post(url, json=payload, timeout=60.0)
+            return r.status_code, (r.json() if r.content else {})
+
+    client = LlamaCppClient(HttpxTransport(), config)
+    try:
+        if not client.health():
+            print("[devserver] local model: health check failed -> degraded")
+            return False, "unavailable"
+        model_id = client.discover_model()
+    except (httpx.HTTPError, PolicyViolation, Exception) as exc:
+        print(f"[devserver] local model unreachable ({type(exc).__name__}) -> degraded")
+        return False, "unavailable"
+
+    print(f"[devserver] local model OK: served id '{model_id}' "
+          f"(artifact {config.expected_model_artifact})")
+    return True, model_id
 
 
 def main(argv: list[str] | None = None) -> int:

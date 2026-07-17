@@ -1,337 +1,178 @@
-# Tradebot
+# Evolutionary Multi-Wallet Trading Platform
 
-> Reviewing this repo as product evidence? Start with **[SHOWCASE.md](SHOWCASE.md)**.
+**A self-evolving BTCUSDT paper-trading research platform.** Twenty-five isolated
+wallets compete every week. Losers are eliminated and permanently banned. A local
+LLM writes their replacements. Nothing is trusted — not the model, not the market
+data, not the generated code.
 
-AI-assisted local Python product prototype for paper/testnet workflow automation, dashboard operations, SQLite persistence, runtime monitoring, security controls and optional advisory AI review.
+> **Paper trading only.** No real exchange orders are ever placed and no funds are
+> held. Nothing here is a profitability claim or investment advice.
 
-Local-first Binance Spot trading automation with SQLite persistence, dashboard
-operations, and optional AI review. Built for cautious paper and Binance Spot
-testnet-oriented workflows, not for casual live-risk experimentation.
+![Portfolio dashboard](docs/screenshots/01-portfolio-dashboard.png)
 
-Tradebot is organized for cautious modernization: setup, safety, tests, runtime
-boundaries, and operator docs should stay clear before larger structural
-refactors.
+---
 
-For deeper operating details, read [OPERATIONS.md](OPERATIONS.md).
+## What it is
 
-## Contents
+| | |
+|---|---|
+| **12 active wallets** | Twelve structurally distinct strategies, 10,000 USDT each |
+| **12 shadow wallets** | Virtual evaluation capital, **never mixed** into active totals |
+| **1 Dark Horse** | Permanent wallet, never reset, exempt from elimination |
+| **130,000 USDT** | Active baseline (12 × 10k + Dark Horse) |
+| **Local Qwen** | Writes and mutates strategies autonomously via llama.cpp |
 
-- [Safety TL;DR](#safety-tldr)
-- [What Tradebot Does](#what-tradebot-does)
-- [What Tradebot Does Not Do](#what-tradebot-does-not-do)
-- [Quick Start](#quick-start)
-- [Operator Quick Reference](#operator-quick-reference)
-- [Docs by Goal](#docs-by-goal)
-- [Architecture Overview](#architecture-overview)
-- [Runtime Files and Logs](#runtime-files-and-logs)
-- [Troubleshooting](#troubleshooting)
-- [Repository Structure](#repository-structure)
-- [Security](#security)
+Every week: rank by profit → eliminate every loser and every zero-trade strategy →
+permanently ban their code **and structure** → generate `ceil(n/2)` novel +
+`floor(n/2)` mutation replacements → promote atomically.
 
-## Safety TL;DR
+## Screenshots
 
-- Start with paper, Binance Spot testnet, and smoke-test workflows. A clean
-  testnet run does not prove live trading is safe.
-- Never grant Binance withdrawal permissions to bot API keys. Use the minimum
-  permissions required for the operating mode.
-- Treat the dashboard as a sensitive local control surface. If it is not bound
-  to localhost only, set `TRADEBOT_DASHBOARD_TOKEN`; do not expose it with a
-  blank/default token.
-- Runtime files are sensitive: SQLite DBs, WAL/SHM files, logs, JSON/JSONL
-  state, screenshots, and ZIP archives can contain account, strategy, or
-  operational data.
-- AI sidecar output is advisory unless the existing engine configuration
-  explicitly consumes it. Do not treat AI output as a safety guarantee or a
-  promise of profitable trading.
+| Active portfolio | Shadow (virtual capital) |
+|---|---|
+| ![Active](docs/screenshots/01-portfolio-dashboard.png) | ![Shadow](docs/screenshots/02-shadow-wallets.png) |
 
-Trading automation is high risk. Live operation can be affected by market
-volatility, exchange latency, partial fills, network failures, account
-permissions, API errors, and operator mistakes. Never commit real secrets. If
-real secrets were committed or shared in a ZIP, rotate them immediately. See
-[SECURITY.md](SECURITY.md).
+| Dark Horse | All 25 wallets |
+|---|---|
+| ![Dark Horse](docs/screenshots/03-dark-horse.png) | ![All](docs/screenshots/04-all-25-wallets.png) |
 
-## What Tradebot Does
+Active, shadow and Dark Horse capital are rendered in **visually distinct panels**
+so virtual money can never be misread as real equity.
 
-- Runs a local Python trading engine for paper and Binance Spot
-  testnet-oriented workflows.
-- Supports the current grid modes `scalpy` and `fatty`; unsupported grid modes
-  fail closed through engine and dashboard validation.
-- Uses `tradebot.sqlite3` through `sqlite_store.py` as the canonical local
-  runtime store.
-- Keeps selected JSON and JSONL runtime mirrors for compatibility, inspection,
-  recovery, and migration workflows.
-- Provides a local browser dashboard for monitoring and selected controls.
-- Starts, stops, restarts, and checks grouped services through
-  `dashboard_orchestrator.py`.
-- Can run an optional AI sidecar through a local OpenAI-compatible endpoint and
-  produce advisory reviews or signals.
-- Provides a manual SQLite migration/backfill command through
-  `migrate_to_sqlite.py`.
+## The twelve strategies
 
-## What Tradebot Does Not Do
+Not twelve presets of one grid — twelve materially different signal engines, each
+with its own `signal()` and conceptual family. This is **proven by test**: all
+twelve score pairwise below the 0.65 structural-similarity threshold under the
+same novelty policy that governs new candidates.
 
-- It does not guarantee profitable trading, loss prevention, or live-trading
-  safety.
-- It does not require or support Binance withdrawal permissions for bot keys.
-- It does not make a public, unauthenticated dashboard safe to expose.
-- It does not make AI/model output authoritative. AI decisions, memory, and
-  signals are sensitive runtime artifacts and remain advisory unless existing
-  engine configuration explicitly consumes them.
-- It does not support the removed legacy Baserow workflow or legacy external
-  chat-bot control surface.
-- It does not move runtime files out of the repository root yet; current paths
-  are preserved for compatibility.
+| # | Strategy | Distinctive characteristic |
+|---|----------|---------------------------|
+| 1 | Volatility-Adaptive Inventory Grid | Multi-level inventory-managed range |
+| 2 | Bollinger Z-Score Reversion | Statistical deviation, with falling-knife veto |
+| 3 | Rolling VWAP Deviation | Volume-weighted fair-value reversion |
+| 4 | RSI/Stochastic Exhaustion | Oscillator exhaustion + recovery trigger |
+| 5 | Donchian Breakout | Price-channel break, volume-confirmed |
+| 6 | EMA Trend Pullback | Trend continuation after a controlled dip |
+| 7 | MACD Histogram Momentum | Momentum acceleration/deceleration |
+| 8 | Bollinger–Keltner Squeeze | Volatility compression → expansion |
+| 9 | Chandelier Trend Follower | Long-horizon ATR trailing |
+| 10 | Multi-Timeframe Momentum | Return momentum across 4 horizons, inverse-vol sized |
+| 11 | OBV / Relative-Volume Breakout | Volume-flow-confirmed accumulation |
+| 12 | Regime-Switching Ensemble | Deterministic regime → independent subpolicies |
 
-## Quick Start
+## Engineering guarantees
 
-These commands assume you are in the repository root.
+Enforced in code and locked by tests — not aspirations.
 
-### 1. Create a virtual environment
+- **Fixed-point money everywhere.** `float` is *rejected at the boundary* in both
+  the domain (`money.py`) and the database (money is stored as exact decimal
+  **text**, because SQLite's `Numeric` silently round-trips through binary float).
+- **Wallet isolation.** Cross-wallet postings are structurally impossible; each
+  wallet only mutates itself.
+- **Fees counted exactly once** — acquisition into cost basis, disposal from
+  proceeds. A flat round trip yields exactly `-(fees)`.
+- **No same-candle churn.** A per-wallet candle watermark makes repeated fills
+  against one open candle impossible.
+- **Deterministic + bit-reproducible.** The same seed replays to identical
+  ledgers, and active/shadow wallets running the same strategy evolve identically.
+- **Profit is the only ranking value.** No Sharpe, drawdown, or committee vote can
+  alter rank — enforced by schema validators, not convention.
 
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
-```
+## Security posture
 
-### 2. Install runtime and development dependencies
+Generated strategy code is treated as **hostile**.
 
-```bash
-python -m pip install -r requirements.txt
-python -m pip install -r requirements-dev.txt
-```
+- **Never imported into any core process.** Each tick runs in a `python -I`
+  subprocess: sanitized environment, temp cwd, hard timeout, POSIX rlimits.
+- **AST deny-by-default**, hardened after an independent verifier proved the
+  original was escapable: `getattr` + string dunders reached
+  `object.__subclasses__()` (299 classes, incl. `os` gadgets). Now *all* dunder
+  access and every reflection builtin are rejected.
+- **SSRF-resistant DataBroker.** Deny-by-default allowlist; DNS-resolved private/
+  link-local/metadata IPs blocked; every redirect revalidated; the model cannot
+  add hosts.
+- **Fail-closed API.** Mutations require a token (401/403/400/422); errors are
+  redacted to a correlation ID; zero unsafe DOM sinks in the frontend.
+- **Identity-verified process control.** A recycled PID receives *no signal at all*.
 
-### 3. Create local configuration
+See [`docs/threat-model.md`](docs/threat-model.md) and
+[`docs/audits/phase13-verification.md`](docs/audits/phase13-verification.md) — the
+latter records every defect independent verifiers found, including two severe ones.
 
-```bash
-cp .env.example .env
-```
-
-Edit `.env` locally. Keep Binance credentials blank in tracked files and store
-real values only in private `.env` files or deployment secret storage. Review
-the Binance/testnet, persistence, dashboard, and local AI sidecar sections
-before starting services.
-
-The example config may use a network-facing dashboard host. For first local
-runs, set `TRADEBOT_DASHBOARD_HOST=127.0.0.1`; only use a network-facing host
-when remote access is intentional and `TRADEBOT_DASHBOARD_TOKEN` is set.
-
-```text
-TRADEBOT_DASHBOARD_HOST=127.0.0.1
-TRADEBOT_DASHBOARD_TOKEN=
-```
-
-### 4. Run tests before services
+## Quick start
 
 ```bash
-python -m pytest -q
+python -m venv .venv
+.venv/Scripts/python -m pip install -r requirements-dev.txt
+
+# Dashboard + API with a seeded 25-wallet portfolio (synthetic market, no network)
+.venv/Scripts/python -m tradebot.api.devserver --port 5555
+# -> http://127.0.0.1:5555/
 ```
 
-### 5. Start local services through the orchestrator
+## Going live
+
+### Market data — **no API key needed**
+
+Public BTCUSDT data requires no credentials. This is deliberate: requiring
+exchange keys for paper trading was audit finding **A10**. The DataBroker
+allowlist already permits `data-api.binance.vision` (GET only,
+`/api/v3/klines`, `/api/v3/exchangeInfo`, …). To go live, point the market
+adapter at it and replace the devserver's synthetic feed.
+
+**If you later add private endpoints** (not required, and not recommended for a
+paper platform), credentials go in `.env` — never in the dashboard, never in git:
 
 ```bash
-python dashboard_orchestrator.py start
-python dashboard_orchestrator.py status
+# .env  (gitignored; CI Gate 1 fails the build if it is ever tracked)
+BINANCE_API_KEY=...
+BINANCE_API_SECRET=...
 ```
 
-Default dashboard URL:
-
-```text
-http://localhost:8844/
-```
-
-Stop services explicitly when you are done:
+### Local LLM
 
 ```bash
-python dashboard_orchestrator.py stop
+TRADEBOT_LLM_PROVIDER=llama_cpp
+TRADEBOT_LLM_BASE_URL=http://172.29.72.68:18081/v1
+TRADEBOT_LLM_HEALTH_URL=http://172.29.72.68:18081/health
+TRADEBOT_LLM_EXPECTED_MODEL_ARTIFACT=Qwen3VL-30B-A3B-Instruct-Q4_K_M.gguf
 ```
 
-## Operator Quick Reference
+The served model ID is **discovered** via `/v1/models` — never assumed to equal
+the GGUF filename. (It currently resolves to `Qwen3-VL-30B-A3B-Instruct`.) If the
+model is down the platform reports **degraded** and keeps trading; it never
+fabricates analysis.
 
-| Goal | Command |
-| --- | --- |
-| Run tests | `.venv/bin/python -m pytest -q` |
-| Run coverage | `.venv/bin/python -m coverage run -m pytest -q`<br>`.venv/bin/python -m coverage report -m` |
-| Compile Python files | `.venv/bin/python -m compileall -q .` |
-| Start services | `.venv/bin/python dashboard_orchestrator.py start` |
-| Stop services | `.venv/bin/python dashboard_orchestrator.py stop` |
-| Check service status | `.venv/bin/python dashboard_orchestrator.py status` |
-| Restart services | `.venv/bin/python dashboard_orchestrator.py restart` |
-| Run a one-off AI review | `.venv/bin/python ai_playground.py` |
-| Run SQLite migration/backfill | `.venv/bin/python migrate_to_sqlite.py` |
+## Quality
 
-Coverage is informational only. The repository does not enforce a minimum
-coverage percentage yet. Run direct components only when debugging:
+| Gate | Result |
+|------|--------|
+| Tests | **430** new-package / **833** full suite |
+| Coverage (`tradebot/*`) | **97%** (ratchet; see [docs/testing.md](docs/testing.md)) |
+| Ruff / Mypy | clean (63 files) |
+| Bandit / pip-audit | **0 issues** / no known vulnerabilities |
+| Tick performance | **0.62 ms** for 24 wallets (10 ms budget) |
 
-```bash
-python engine.py
-python dashboard_server.py
-python ai_sidecar.py
-```
+CI runs 8 gates: hygiene, correctness, security, database, frontend, deterministic
+replay, performance, release candidate.
 
-## Docs by Goal
+## Documentation
 
-| Goal | Read |
-| --- | --- |
-| Understand module boundaries and refactor risks | [docs/architecture.md](docs/architecture.md) |
-| Handle SQLite, logs, JSON/JSONL mirrors, backups, and archives | [docs/runtime-artifacts.md](docs/runtime-artifacts.md) |
-| Understand removed legacy paths and quarantine candidates | [docs/legacy-inventory.md](docs/legacy-inventory.md) |
-| Operate, stop, recover, migrate, and troubleshoot services | [OPERATIONS.md](OPERATIONS.md) |
-| Configure credentials and report security issues safely | [SECURITY.md](SECURITY.md) |
+[Architecture](docs/architecture.md) · [Accounting](docs/accounting-model.md) ·
+[Execution](docs/execution-model.md) · [Plugin SDK](docs/strategy-plugin-sdk.md) ·
+[Evolution policy](docs/evolution-policy.md) · [Dark Horse](docs/dark-horse.md) ·
+[DataBroker](docs/data-broker.md) · [Threat model](docs/threat-model.md) ·
+[Testing](docs/testing.md) · [Release checklist](docs/release-checklist.md)
 
-## Requirements
+## Honest status
 
-- Python 3.11 is recommended for CI parity.
-- Python 3.10 is currently used by the local development environment.
-- Git.
-- Network access for dependency installation.
-- Optional local services depending on what you run: Binance Spot testnet
-  access, dashboard access, and an Ollama/OpenAI-compatible local AI endpoint.
+The new `tradebot` package is a release candidate, not a finished replacement:
 
-## Environment Variables
+- Legacy event **import is not implemented** — the platform starts fresh.
+- Coverage is **97%, not 100%**.
+- Frontend has static safety analysis; no jsdom/Playwright suite yet.
+- The legacy flat modules still exist and still carry their original findings.
+- The devserver's market is **synthetic**, not live Binance.
 
-Create `.env` from `.env.example` and keep `.env` untracked:
-
-```bash
-cp .env.example .env
-```
-
-`.env.example` must stay placeholder-only, with secret values left blank.
-Review the sections in `.env.example` before running services:
-
-- Binance/testnet configuration.
-- Persistence/runtime storage.
-- Dashboard configuration.
-- Local AI sidecar configuration.
-
-Legacy Baserow environment settings are intentionally absent because the
-deprecated Baserow tooling has been removed.
-
-`TRADEBOT_DASHBOARD_HOST=0.0.0.0` exposes the dashboard to the network. Set
-`TRADEBOT_DASHBOARD_TOKEN` if the dashboard is not localhost-only.
-
-## Architecture Overview
-
-For a fuller architecture map and refactor boundaries, see
-[docs/architecture.md](docs/architecture.md).
-
-### Engine
-
-`engine.py` owns the trading loop, runtime state handling, grid/accounting
-state, optional AI signal consumption, and status/event outputs. It is the
-highest-risk module because it is closest to strategy decisions and exchange
-interaction.
-
-Supported grid modes are `scalpy` and `fatty`; unsupported grid modes fail
-closed through engine and dashboard configuration validation.
-
-### SQLite Persistence
-
-`sqlite_store.py` provides the canonical local SQLite runtime store. The
-default local database is currently `tradebot.sqlite3`. WAL and SHM sidecar
-files may be created by SQLite while the database is active.
-
-JSON and JSONL files remain compatibility mirrors for selected runtime flows,
-operator inspection, recovery, and migration work.
-
-### Dashboard and Control Surface
-
-`dashboard_server.py`, `dashboard_routes.py`, dashboard support modules, and
-`dashboard/static/` provide local visibility and selected controls. Treat
-dashboard mutation endpoints as sensitive and use token controls whenever the
-dashboard is not localhost-only.
-
-### AI Sidecar
-
-`ai_sidecar.py` can produce local AI reviews and optional AI signal outputs
-using an OpenAI-compatible local endpoint. AI output is advisory unless
-existing engine configuration explicitly consumes it.
-
-### External Messaging Runtime
-
-External chat-bot control and notification runtimes are not part of the
-supported application. Operational visibility and controls are owned by the
-dashboard, logs, and local runtime state.
-
-## Runtime Files and Logs
-
-Runtime files are local artifacts and must not be committed. They may contain
-account state, trade history, dashboard state, AI output, operational logs, or
-local secrets.
-
-Current examples include:
-
-- `tradebot.sqlite3`
-- `*.sqlite3-wal`
-- `*.sqlite3-shm`
-- `*.log`
-- `*.pid`
-- `*.nohup.out`
-- `state.json`
-- `runtime_state.json`
-- `engine_status.json`
-- `cumulative.json`
-- `trades.jsonl`
-- `ai_signal.json`
-- `ai_decisions.jsonl`
-- `ai_memory.json`
-- `dashboard_history.json`
-
-Legacy local artifacts from removed workflows may still exist in old
-workspaces and remain ignored:
-
-- `advisor.log`
-- `state_trend.json`
-- `engine_status_trend.json`
-- `cumulative_trend.json`
-- `trades_trend.jsonl`
-- `engine_trend.log`
-
-For the full source-vs-runtime policy, backup guidance, restore guidance, and
-future runtime layout direction, see
-[docs/runtime-artifacts.md](docs/runtime-artifacts.md).
-
-## Troubleshooting
-
-- If `python -m pytest -q` fails because `pytest` is missing, install
-  development dependencies with `python -m pip install -r requirements-dev.txt`.
-- If `python3 -m pip` is unavailable on a system Python, use the project virtual
-  environment created with `python3 -m venv .venv`.
-- If Binance authentication fails, confirm that credentials are present only in
-  local `.env` files and that the base URL matches the intended environment.
-- If the dashboard is unreachable, check `TRADEBOT_DASHBOARD_HOST`,
-  `TRADEBOT_DASHBOARD_PORT`, firewall rules, and the orchestrator status.
-- If the AI sidecar fails, confirm the local AI endpoint is reachable and the
-  configured model exists.
-- If generated runtime files appear in the working tree, check
-  [docs/runtime-artifacts.md](docs/runtime-artifacts.md) before deciding whether
-  to ignore, preserve, or clean them.
-
-## Repository Structure
-
-```text
-.
-|-- engine.py                      # Trading engine
-|-- sqlite_store.py                # SQLite persistence helpers
-|-- dashboard_server.py            # Dashboard server
-|-- dashboard_routes.py            # Dashboard route helpers
-|-- dashboard/                     # Dashboard static assets
-|-- ai_sidecar.py                  # Optional AI sidecar
-|-- ai_playground.py               # One-off AI review helper
-|-- dashboard_orchestrator.py      # Local service orchestrator
-|-- migrate_to_sqlite.py           # Manual SQLite migration/backfill helper
-|-- requirements.txt               # Runtime dependencies
-|-- requirements-dev.txt           # Development/test dependencies
-|-- .env.example                   # Placeholder-only environment template
-|-- SECURITY.md                    # Security and secret handling guidance
-|-- OPERATIONS.md                  # Operational runbook
-|-- docs/                          # Architecture and policy documentation
-`-- tests/                         # Test suite
-```
-
-## Security
-
-Read [SECURITY.md](SECURITY.md) before configuring credentials or sharing this
-repository. Real secrets must never be committed. Runtime databases, logs, JSONL
-trade logs, PID files, generated state files, AI artifacts, screenshots, and
-ZIP archives can contain sensitive operational data.
+Full detail in [`docs/release-checklist.md`](docs/release-checklist.md).
