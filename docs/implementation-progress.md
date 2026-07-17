@@ -56,7 +56,7 @@ when its acceptance gate passes with recorded command output.
 | 7 | DataBroker & local llama.cpp client | **Done** | `infrastructure/data_broker/{policy,client}.py`, `infrastructure/llm/llama_cpp_client.py`; `docs/data-broker.md`; 32 tests (allowlist, SSRF/rebinding/redirect/userinfo/port/mime/size, sanitization, schema-repair, degrade-not-raise) |
 | 8 | Daily & weekly learning | Not started | — |
 | 9 | Evolution, novelty & promotion | **Done** | `domain/{evaluations,lineage}.py`, `application/{evolution,liquidation,promotion,novelty}.py`; `docs/evolution-policy.md`; 55 tests (all replacement scenarios, ban reuse, roll-forward, shortage rollback, invariants, AST fingerprinting, novelty/mutation thresholds, lineage graph) |
-| 10 | Dark Horse | Not started | — |
+| 10 | Dark Horse | **Done** | `domain/dark_horse.py`, `application/dark_horse.py`; `docs/dark-horse.md`; 21 tests (five-domain committee, explicit missing/stale degradation, no-shorting type, elimination exemption via Phase 9 engine, wallet continuity across upgrade/rollback) |
 | 11 | API & dashboard rewrite | Not started | — |
 | 12 | Operations, observability & CI | Not started | — |
 | 13 | Independent verification & cleanup | Not started | — |
@@ -89,3 +89,20 @@ when its acceptance gate passes with recorded command output.
   lineage survives elimination as permanent evidence.
 - 21 new tests. New-package suite **210 passed**; ruff clean; full suite
   **613 passed / same 11 pre-existing failures**.
+
+### Phase 10 — evidence (actual)
+- Five required domains enforced; every decision records all five states and links
+  evidence ids. Missing domain -> MISSING with zero items (nothing invented); stale
+  evidence -> STALE; empty-item OK report downgraded to MISSING.
+- Degradation policy proven: any degraded domain caps the decision at HOLD
+  ("uncertainty never buys"), while defensive REDUCE stays available.
+- No-shorting proven at the type level: DarkHorseAction has exactly
+  {accumulate, hold, reduce, exit_to_cash}.
+- Cross-phase integration: a Dark Horse losing 5,000 USDT with ZERO fills survives
+  the Phase 9 elimination engine while the bottom-six rule retires six actives
+  (`test_dark_horse_never_eliminated_despite_loss_and_no_trades`).
+- Wallet continuity proven: upgrade and rollback both preserve wallet identity,
+  quote/base balances and lifetime realized P&L; six successive upgrades never
+  restore the 10,000 starting balance.
+- 21 new tests. New-package suite **231 passed**; ruff clean; full suite
+  **634 passed / same 11 pre-existing failures**.
