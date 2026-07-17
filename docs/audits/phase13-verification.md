@@ -124,6 +124,38 @@ would have been circular and proved nothing. Regressions:
 `::test_matches_live_still_defeats_pid_reuse` (anti-reuse preserved),
 `::test_status_reports_running_with_os_only_probe`.
 
+### V7 (MODERATE) — Money stored as binary float in SQLite
+
+**Found by:** database verifier (partial signal: "Confirmed money precision
+loss"), reproduced and characterised manually after the verifier died.
+
+`tradebot/infrastructure/database/models.py`
+
+Money columns were declared `Numeric(24, 2)` / `Numeric(24, 8)`. That looks
+correct, but **SQLite has no native decimal type**: SQLAlchemy stores `Numeric`
+as `REAL` and binds it through a Python `float`. Confirmed directly in the
+emitted SQL parameters — `(..., 10000.0, 10000.07, 0.12345678, 60000.01, ...)`
+are floats, not Decimals — and by `typeof(quote_cash) = real`.
+
+This violated the "never binary floating point" rule and the
+`tradebot.domain.money` invariant, and made the declared 24-digit precision a
+**false promise**: float64 carries ~15-17 significant digits.
+
+**Severity, characterised honestly:** the round trip is *exact* for realistic
+values, because SQLAlchemy quantizes back to scale on read, masking the error.
+BTC's entire 21M supply at satoshi precision is 16 significant digits, safely
+inside float64. The masking fails at 20 digits — verified:
+`Decimal("123456789012.12345678")` read back as `123456789012.12345886`. So this
+was a latent correctness/spec violation, **not** a live money bug.
+
+**Fix:** a `DecimalText` `TypeDecorator` stores the exact decimal string,
+quantizing at the boundary and **rejecting floats outright** (mirroring
+`domain.money`). Storage is now `text`; the 20-digit case round-trips exactly;
+1000 × 0.07 accumulates through the DB to exactly 70.00 with zero drift.
+Regressions: `test_database.py::test_money_columns_are_stored_as_text_not_real`,
+`::test_money_round_trips_exactly_beyond_float64_precision`,
+`::test_money_column_rejects_float`, `::test_repeated_accumulation_does_not_drift`.
+
 ### V6 (LOW) — Improper `# pragma: no cover` on a testable guard
 
 `tradebot/domain/money.py:44` — the float-rejection guard was marked
@@ -163,5 +195,13 @@ session limit before producing findings.
   reproduced or resolved** and remains an open lead worth chasing: money columns
   should be text/`Numeric`, never `REAL`.
 
-These two gaps, plus the known Phase 3 legacy-import gap and the 97%-not-100%
+**Update:** the database verifier's partial signal *was* chased to ground and
+resolved — see **V7** above. The remaining unverified area is therefore:
+
+- **Evolution / replacement / promotion rule fidelity** — covered only by the
+  author's own tests. The elimination-count, ceil/floor allocation, parent
+  eligibility, ban-reuse and crash-injection rules remain **unverified by an
+  independent reviewer**.
+
+That gap, plus the known Phase 3 legacy-import gap and the 97%-not-100%
 coverage position, are the honest outstanding risks on this branch.

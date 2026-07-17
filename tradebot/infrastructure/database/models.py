@@ -1,8 +1,16 @@
 """Canonical normalized schema (SQLAlchemy 2.x).
 
 The database is the single source of truth; JSON/Markdown are derived exports.
-Money columns use ``Numeric`` (fixed-point), never ``Float``. Foreign keys and
-check constraints enforce accounting and lifecycle invariants (A04/A22).
+Foreign keys and check constraints enforce accounting and lifecycle invariants
+(A04/A22).
+
+**Money is stored as TEXT, not Numeric.** SQLite has no native decimal type:
+``Numeric`` there is stored as ``REAL`` and SQLAlchemy binds it through a binary
+``float``, which (a) violates the "never binary floating point" rule and (b)
+makes the declared 24-digit precision a false promise — float64 carries ~15-17
+significant digits. Verified: ``Decimal("123456789012.12345678")`` round-tripped
+as ``123456789012.12345886``. :class:`DecimalText` stores the exact decimal
+string instead, so persistence matches the in-memory fixed-point invariant.
 """
 
 from __future__ import annotations
@@ -14,17 +22,47 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
-    Numeric,
     String,
+    Text,
+    TypeDecorator,
     UniqueConstraint,
     event,
 )
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
-QUOTE = Numeric(24, 2)
-BASE = Numeric(24, 8)
-PRICE = Numeric(24, 2)
+
+class DecimalText(TypeDecorator):
+    """Exact fixed-point storage: Decimal <-> TEXT, never via float.
+
+    ``scale`` quantizes on the way in so a column's precision is enforced at
+    the boundary rather than trusted. Binary floats are rejected outright, in
+    keeping with ``tradebot.domain.money``.
+    """
+
+    impl = Text
+    cache_ok = True
+
+    def __init__(self, scale: str) -> None:
+        super().__init__()
+        self.scale = Decimal(scale)
+
+    def process_bind_param(self, value, dialect):
+        if value is None:
+            return None
+        if isinstance(value, float):
+            raise TypeError("float is not allowed in money columns; use Decimal")
+        return str(Decimal(value).quantize(self.scale))
+
+    def process_result_value(self, value, dialect):
+        if value is None:
+            return None
+        return Decimal(value)
+
+
+QUOTE = DecimalText("0.01")
+BASE = DecimalText("0.00000001")
+PRICE = DecimalText("0.01")
 
 
 @event.listens_for(Engine, "connect")
@@ -198,7 +236,8 @@ class LedgerPostingRow(Base):
     )
     account: Mapped[str] = mapped_column(String(32), nullable=False)
     currency: Mapped[str] = mapped_column(String(8), nullable=False)
-    amount: Mapped[Decimal] = mapped_column(Numeric(28, 8), nullable=False)
+    # Postings span both currencies, so use the finer (base) scale.
+    amount: Mapped[Decimal] = mapped_column(BASE, nullable=False)
 
     transaction: Mapped[LedgerTransactionRow] = relationship(back_populates="postings")
 

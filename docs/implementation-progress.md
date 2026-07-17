@@ -230,7 +230,20 @@ Post-fix gates (actual): new-package **415 passed**; ruff clean; mypy clean (62
 files); bandit **0 issues**; coverage `tradebot/*` **97%**; full suite **818
 passed / same 11 pre-existing failures**.
 
-**NOT verified (honest gap):** the evolution-rules and database/migration
-verifiers died before reporting. Those areas rest on the author's own tests only.
-The DB verifier's unreproduced partial signal *"Confirmed money precision loss"*
-remains an open lead.
+7. **MODERATE: money stored as binary float in SQLite.** Chased down the DB
+   verifier's *"Confirmed money precision loss"* lead. `Numeric` on SQLite is
+   stored as `REAL` and bound through a Python float (proven in the emitted SQL
+   params and `typeof(quote_cash)=real`), violating "never binary floating
+   point" and making the declared 24-digit precision a false promise.
+   Characterised honestly: exact for realistic values (quantize-on-read masks
+   it; BTC's whole supply at satoshi precision is 16 digits), but breaks at 20 —
+   `123456789012.12345678` -> `...886`. Fixed with a `DecimalText` TypeDecorator
+   storing exact strings and rejecting floats. Storage now `text`; 20-digit case
+   exact; 1000x0.07 accumulates to exactly 70.00.
+
+Post-fix gates (actual): new-package **419 passed**; ruff clean; mypy clean;
+bandit 0; full suite **822 passed / same 11 pre-existing failures**.
+
+**NOT verified (honest gap):** the evolution-rules verifier died before
+reporting, so the elimination/allocation/ban/promotion rules rest on the
+author's own tests only. The database lead was chased to ground (finding 7).

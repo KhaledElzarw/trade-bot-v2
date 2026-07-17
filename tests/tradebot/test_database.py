@@ -108,3 +108,105 @@ def test_rollback_on_error_leaves_no_partial_state(engine):
     with UnitOfWork(engine) as uow:
         assert uow.session.get(WRow, "w2") is None
         assert uow.session.get(WRow, "w1") is not None
+
+
+# ---- Phase-13 verifier regression: money must not go through binary float ---
+
+def _wallet_kwargs(**over):
+    import datetime as _dt
+    from decimal import Decimal as D
+    base = dict(
+        wallet_id="w1", wallet_kind="active", stable_name="n1",
+        display_name="n1", status="active",
+        initial_quote_balance=D("10000.00"), quote_cash=D("10000.00"),
+        created_at=_dt.datetime(2026, 7, 17),
+    )
+    base.update(over)
+    return base
+
+
+def test_money_columns_are_stored_as_text_not_real(tmp_path):
+    """SQLite has no decimal type: `Numeric` is stored as REAL and bound via a
+    binary float, violating the fixed-point rule. Money columns must be TEXT."""
+    from sqlalchemy import create_engine, text
+    from sqlalchemy.orm import Session
+
+    from tradebot.infrastructure.database.models import Base, Wallet
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'p.db'}")
+    Base.metadata.create_all(engine)
+    with Session(engine) as s:
+        s.add(Wallet(**_wallet_kwargs()))
+        s.commit()
+    with engine.connect() as c:
+        row = c.execute(text(
+            "SELECT typeof(quote_cash), typeof(base_qty), typeof(avg_cost), "
+            "typeof(realized_pnl) FROM wallets")).one()
+    assert set(row) == {"text"}, f"money stored as {row}, expected text"
+
+
+def test_money_round_trips_exactly_beyond_float64_precision(tmp_path):
+    """float64 carries ~15-17 significant digits; the schema declares more.
+
+    Before the fix this value came back as 123456789012.12345886.
+    """
+    from decimal import Decimal as D
+
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session
+
+    from tradebot.infrastructure.database.models import Base, Wallet
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'p.db'}")
+    Base.metadata.create_all(engine)
+    precise = D("123456789012.12345678")  # 20 significant digits
+    with Session(engine) as s:
+        s.add(Wallet(**_wallet_kwargs(base_qty=precise)))
+        s.commit()
+    with Session(engine) as s:
+        assert s.get(Wallet, "w1").base_qty == precise
+
+
+def test_money_column_rejects_float(tmp_path):
+    """A float must never reach a money column, mirroring domain.money."""
+    import pytest as _pytest
+    from sqlalchemy import create_engine
+    from sqlalchemy.exc import StatementError
+    from sqlalchemy.orm import Session
+
+    from tradebot.infrastructure.database.models import Base, Wallet
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'p.db'}")
+    Base.metadata.create_all(engine)
+    with Session(engine) as s:
+        s.add(Wallet(**_wallet_kwargs(quote_cash=10000.07)))  # float!
+        # SQLAlchemy wraps bind-param errors in StatementError; the underlying
+        # cause must be our TypeError.
+        with _pytest.raises(Exception, match="float is not allowed") as exc:
+            s.commit()
+    assert isinstance(exc.value, (TypeError, StatementError))
+    if isinstance(exc.value, StatementError):
+        assert isinstance(exc.value.orig, TypeError)
+
+
+def test_repeated_accumulation_does_not_drift(tmp_path):
+    """1000 x 0.07 through the DB must be exactly 70.00 (no float creep)."""
+    from decimal import Decimal as D
+
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session
+
+    from tradebot.infrastructure.database.models import Base, Wallet
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'p.db'}")
+    Base.metadata.create_all(engine)
+    with Session(engine) as s:
+        s.add(Wallet(**_wallet_kwargs(realized_pnl=D("0.00"))))
+        s.commit()
+    for _ in range(1000):
+        with Session(engine) as s:
+            w = s.get(Wallet, "w1")
+            w.realized_pnl = w.realized_pnl + D("0.07")
+            s.commit()
+    with Session(engine) as s:
+        assert s.get(Wallet, "w1").realized_pnl == D("70.00")
