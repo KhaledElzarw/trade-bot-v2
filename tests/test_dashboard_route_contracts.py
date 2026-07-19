@@ -217,7 +217,7 @@ def test_static_route_serves_dashboard_js_asset(monkeypatch, tmp_path):
     static_dir = tmp_path / "static"
     static_dir.mkdir()
     asset = static_dir / "dashboard.v1.js"
-    asset.write_text("console.log('dashboard');\n", encoding="utf-8")
+    asset.write_text("console.log('dashboard');\n", encoding="utf-8", newline="\n")
     monkeypatch.setattr(dashboard_server, "STATIC_DIR", static_dir)
 
     server = _start_server()

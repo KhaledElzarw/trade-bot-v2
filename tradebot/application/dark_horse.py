@@ -188,6 +188,7 @@ class DarkHorseWallet:
 
 
 def is_exempt_from_elimination(kind: str) -> bool:
-    """Dark Horse is exempt from weekly loss AND no-trade elimination."""
+    """Both permanent wallets (Dark Horse and Darkhorse - Daily) are exempt
+    from weekly loss AND no-trade elimination."""
 
-    return kind == "dark_horse"
+    return kind in ("dark_horse", "dark_horse_daily")

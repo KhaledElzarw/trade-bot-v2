@@ -13,8 +13,10 @@ from dataclasses import dataclass, field
 NOVEL = "novel"
 MUTATION = "mutation"
 DARK_HORSE_UPGRADE = "dark_horse_upgrade"
+DARK_HORSE_DAILY_ADAPTATION = "dark_horse_daily_adaptation"
 
-RELATIONSHIP_TYPES = frozenset({NOVEL, MUTATION, DARK_HORSE_UPGRADE})
+RELATIONSHIP_TYPES = frozenset({NOVEL, MUTATION, DARK_HORSE_UPGRADE,
+                                DARK_HORSE_DAILY_ADAPTATION})
 
 
 @dataclass(frozen=True, slots=True)

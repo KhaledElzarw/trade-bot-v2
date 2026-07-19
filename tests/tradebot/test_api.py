@@ -178,21 +178,24 @@ def test_health_and_readiness():
 
 def test_portfolio_summary_separates_active_and_shadow():
     body = client().get("/api/v2/portfolio/summary").json()
-    assert body["active"]["starting_capital"] == "130000.00"
-    assert body["active"]["current_equity"] == "130000.00"
+    assert body["active"]["starting_capital"] == "140000.00"
+    assert body["active"]["current_equity"] == "140000.00"
     assert body["shadow"]["virtual_equity"] == "120000.00"
     # Shadow is a separate section; it is never folded into the active total.
     assert body["active"]["current_equity"] != body["shadow"]["virtual_equity"]
     assert body["dark_horse"]["display_name"] == "Dark Horse"
+    assert body["dark_horse_daily"]["display_name"] == "Darkhorse - Daily"
 
 
 def test_wallet_filters():
     c = client()
-    assert len(c.get("/api/v2/wallets").json()["wallets"]) == 25
+    assert len(c.get("/api/v2/wallets").json()["wallets"]) == 26
     assert len(c.get("/api/v2/wallets?kind=active").json()["wallets"]) == 12
     assert len(c.get("/api/v2/wallets?kind=shadow").json()["wallets"]) == 12
     dh = c.get("/api/v2/wallets?kind=dark_horse").json()["wallets"]
     assert len(dh) == 1 and dh[0]["display_name"] == "Dark Horse"
+    dhd = c.get("/api/v2/wallets?kind=dark_horse_daily").json()["wallets"]
+    assert len(dhd) == 1 and dhd[0]["display_name"] == "Darkhorse - Daily"
 
 
 def test_wallet_detail_and_404():

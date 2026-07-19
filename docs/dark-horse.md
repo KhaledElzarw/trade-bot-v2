@@ -2,7 +2,8 @@
 
 One additional **permanent** active wallet. Display name is exactly `Dark
 Horse`. Internal role `dark_horse`. Starts at 10,000.00 USDT and is counted in
-the 130,000.00 active baseline.
+the 140,000.00 active baseline (alongside `Darkhorse - Daily` — see
+`docs/dark-horse-daily.md`).
 
 ## Guaranteed software invariants
 

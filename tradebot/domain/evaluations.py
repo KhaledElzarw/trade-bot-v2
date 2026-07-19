@@ -24,7 +24,7 @@ class WalletEvaluation:
     strategy_version_id: str
     code_hash: str
     structural_fingerprint: str
-    kind: str  # active | shadow | dark_horse
+    kind: str  # active | shadow | dark_horse | dark_horse_daily
     evaluation_start_equity: Decimal
     pre_liquidation_equity: Decimal
     liquidation_adjusted_equity: Decimal

@@ -151,7 +151,10 @@ def test_stop_pid_sends_sigkill_after_timeout_when_process_stays_alive(
 
     wrapper_runner.stop_pid(12345, timeout=0.1)
 
-    assert calls == [(12345, signal.SIGTERM), (12345, signal.SIGKILL)]
+    assert calls == [
+        (12345, signal.SIGTERM),
+        (12345, wrapper_runner.FORCE_KILL_SIGNAL),
+    ]
     assert sleeps == [0.1]
 
 
@@ -162,7 +165,8 @@ def test_stop_pid_swallows_sigkill_exception_after_timeout(monkeypatch):
 
     def fake_kill(pid, sig):
         calls.append((pid, sig))
-        if sig == signal.SIGKILL:
+        # The escalation kill (second call) fails; stop_pid must swallow it.
+        if len(calls) == 2:
             raise OSError("denied")
 
     monkeypatch.setattr(wrapper_runner.os, "kill", fake_kill)
@@ -172,7 +176,10 @@ def test_stop_pid_swallows_sigkill_exception_after_timeout(monkeypatch):
 
     wrapper_runner.stop_pid(12345, timeout=0.1)
 
-    assert calls == [(12345, signal.SIGTERM), (12345, signal.SIGKILL)]
+    assert calls == [
+        (12345, signal.SIGTERM),
+        (12345, wrapper_runner.FORCE_KILL_SIGNAL),
+    ]
     assert sleeps == [0.1]
 
 

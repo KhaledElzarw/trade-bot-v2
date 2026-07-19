@@ -78,8 +78,9 @@ class Base(DeclarativeBase):
     pass
 
 
-WALLET_KINDS = ("active", "shadow", "dark_horse", "archived")
-STRATEGY_ORIGINS = ("builtin", "novel", "mutation", "dark_horse")
+WALLET_KINDS = ("active", "shadow", "dark_horse", "dark_horse_daily", "archived")
+STRATEGY_ORIGINS = ("builtin", "novel", "mutation", "dark_horse",
+                    "dark_horse_daily")
 
 
 class Wallet(Base):
@@ -104,8 +105,10 @@ class Wallet(Base):
     )
 
     __table_args__ = (
-        CheckConstraint("wallet_kind IN ('active','shadow','dark_horse','archived')",
-                        name="ck_wallet_kind"),
+        CheckConstraint(
+            "wallet_kind IN "
+            "('active','shadow','dark_horse','dark_horse_daily','archived')",
+            name="ck_wallet_kind"),
         CheckConstraint("quote_cash >= 0", name="ck_wallet_quote_nonneg"),
         CheckConstraint("base_qty >= 0", name="ck_wallet_base_nonneg"),
     )
@@ -122,8 +125,10 @@ class StrategyDefinition(Base):
     permanently_banned: Mapped[bool] = mapped_column(default=False, nullable=False)
 
     __table_args__ = (
-        CheckConstraint("origin IN ('builtin','novel','mutation','dark_horse')",
-                        name="ck_strategy_origin"),
+        CheckConstraint(
+            "origin IN "
+            "('builtin','novel','mutation','dark_horse','dark_horse_daily')",
+            name="ck_strategy_origin"),
     )
 
 

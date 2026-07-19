@@ -57,6 +57,7 @@ when its acceptance gate passes with recorded command output.
 | 8 | Daily & weekly learning | **Done** | `domain/lessons.py`, `application/lessons.py`, `reports/renderer.py`; 22 tests (schema-enforced hypothesis labelling, committee cannot reorder rank or spare a loser, engine facts override model, idempotency, degraded output, atomic rendering) |
 | 9 | Evolution, novelty & promotion | **Done** | `domain/{evaluations,lineage}.py`, `application/{evolution,liquidation,promotion,novelty}.py`; `docs/evolution-policy.md`; 55 tests (all replacement scenarios, ban reuse, roll-forward, shortage rollback, invariants, AST fingerprinting, novelty/mutation thresholds, lineage graph) |
 | 10 | Dark Horse | **Done** | `domain/dark_horse.py`, `application/dark_horse.py`; `docs/dark-horse.md`; 21 tests (five-domain committee, explicit missing/stale degradation, no-shorting type, elimination exemption via Phase 9 engine, wallet continuity across upgrade/rollback) |
+| 10b | Darkhorse - Daily | **Done** | `domain/dark_horse_daily.py`, `application/dark_horse_daily.py`; `docs/dark-horse-daily.md`; 24 tests (bounded daily adaptation from own + peer lessons, hypothesis-cannot-tweak schema rule, citation enforcement, clamp/step budget, degraded no-change, idempotency, elimination exemption, wallet continuity) |
 | 11 | API & dashboard rewrite | **Core done** | `tradebot/api/{security,app,views}.py`, `dashboard/static/dashboard.v2.js`; 44 tests (fail-closed mutations, redacted errors, bind guard, CSP headers, 19 v2 routes, zero unsafe DOM sinks, URL vetting) |
 | 12 | Operations, observability & CI | **Done** | `operations/{process_identity,structured_logging}.py`, `cli/tradebotctl.py`, 8-gate `.github/workflows/ci.yml`, `pyproject.toml` (mypy/bandit/coverage), `docs/testing.md`; 48 tests |
 | 13 | Independent verification & cleanup | **Partial** | `docs/audits/phase13-verification.md`; 6 verifiers launched (2 completed, 4 hit session limit); 6 defects found and fixed incl. a CRITICAL sandbox escape; 2 areas remain unverified |
@@ -106,6 +107,49 @@ when its acceptance gate passes with recorded command output.
   restore the 10,000 starting balance.
 - 21 new tests. New-package suite **231 passed**; ruff clean; full suite
   **634 passed / same 11 pre-existing failures**.
+
+### Phase 10b (Darkhorse - Daily) — evidence (actual)
+- A second permanent wallet (`dark_horse_daily`, display name exactly
+  `Darkhorse - Daily`) that re-tunes its strategy parameters once per completed
+  UTC day from the daily lessons — its own plus every other wallet's.
+- Learning contract enforced by schema, not trusted to the model: a hypothesis
+  may never move a parameter ("uncertainty never tweaks"); every adjustment
+  must cite considered lessons; citations outside the considered set are
+  rejected.
+- Engine guardrails proven: unknown parameters dropped, uncited proposals
+  dropped, first proposal per parameter wins with the step budget measured from
+  the day-start value, every move clamped to hard bounds and the per-parameter
+  daily step budget.
+- Degraded paths proven: model failure or a lesson-less day yields an explicit
+  no-change record with the reason; adaptation is idempotent per day; a
+  no-change day cannot mint a new version (no version churn).
+- Continuity reuses the Dark Horse mechanics: daily version activation and
+  rollback never touch balances; exempt from weekly elimination alongside Dark
+  Horse; active baseline now 140,000.00 (12 active + both permanent wallets).
+- 24 new tests. New-package suite **454 passed**.
+
+### Legacy baseline failures — fixed (2026-07-19)
+The 11 pre-existing legacy failures (and the `fcntl` collection error) from the
+Phase 0 baseline are now resolved; the FULL suite is green on Windows
+(**870 passed, 0 failed, 0 errors**). Root causes:
+- `dashboard_server.py` `_deterministic_regime_rows` referenced an undefined
+  `state` (NameError behind 4 failures); `state` is now threaded through
+  `_fallback_intelligence`/`refresh_intelligence` so the equity override works.
+- `dashboard_mode_label` had regressed to legacy labels; restored the
+  spec'd labels (`Scalpy + Local AI`, `Fatty + Rules`, `Optimized AI`,
+  `Rules`, `Grid + Local AI`).
+- The HTML shell had lost the `id="state-mode"` element (its server-side
+  replacement and client JS still targeted it); element restored and injected.
+- Macro-calendar dates used the OS locale/timezone
+  (`toLocaleDateString(undefined, …)` → "7 May" on en-GB machines); pinned to
+  `en-US` + UTC so rendering is machine-independent.
+- `wrapper_runner.stop_pid` escalation used `signal.SIGKILL`, which doesn't
+  exist on Windows — the force-kill silently never fired; now a portable
+  `FORCE_KILL_SIGNAL`.
+- `json_store.update_json_locked` imported Unix-only `fcntl` at module level;
+  now uses an fcntl/msvcrt shim.
+- Two tests had Windows-hostile assumptions (POSIX `/` path split; implicit
+  `\n`→`\r\n` newline translation in `write_text`); made platform-neutral.
 
 ### Phase 8 — evidence (actual)
 - A20 closed at the schema level: `Claim` REJECTS any statement lacking

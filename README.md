@@ -19,7 +19,7 @@ data, not the generated code.
 | **12 active wallets** | Twelve structurally distinct strategies, 10,000 USDT each |
 | **12 shadow wallets** | Virtual evaluation capital, **never mixed** into active totals |
 | **1 Dark Horse** | Permanent wallet, never reset, exempt from elimination |
-| **130,000 USDT** | Active baseline (12 × 10k + Dark Horse) |
+| **140,000 USDT** | Active baseline (12 × 10k + Dark Horse + Darkhorse - Daily) |
 | **Local Qwen** | Writes and mutates strategies autonomously via llama.cpp |
 
 Every week: rank by profit → eliminate every loser and every zero-trade strategy →

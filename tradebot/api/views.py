@@ -112,12 +112,13 @@ class InMemoryPortfolioView:
                 "wallet_count": len(self.portfolio.shadow),
                 "note": "virtual evaluation capital; excluded from active totals",
             },
-            "dark_horse": self._dark_horse_summary(),
+            "dark_horse": self._permanent_summary(self.portfolio.dark_horse),
+            "dark_horse_daily": self._permanent_summary(
+                self.portfolio.dark_horse_daily),
             "mark_price": money(self.mark_price),
         }
 
-    def _dark_horse_summary(self) -> dict | None:
-        slot = self.portfolio.dark_horse
+    def _permanent_summary(self, slot) -> dict | None:
         if slot is None:
             return None
         equity = slot.wallet.equity(self.mark_price)
@@ -135,6 +136,8 @@ class InMemoryPortfolioView:
         out += [(s, "shadow") for s in self.portfolio.shadow]
         if self.portfolio.dark_horse is not None:
             out.append((self.portfolio.dark_horse, "dark_horse"))
+        if self.portfolio.dark_horse_daily is not None:
+            out.append((self.portfolio.dark_horse_daily, "dark_horse_daily"))
         return out
 
     def _wallet_dict(self, slot, kind: str) -> dict:

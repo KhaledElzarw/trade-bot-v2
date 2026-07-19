@@ -1,4 +1,5 @@
-"""Portfolio composition: 12 active + 12 shadow + 1 permanent Dark Horse.
+"""Portfolio composition: 12 active + 12 shadow + 2 permanent wallets
+(Dark Horse and Darkhorse - Daily).
 
 Wallet naming rule: display names are ``StrategyName_DaysSinceStrategyChanged``
 computed from the current assignment's activation timestamp. Display names are
@@ -18,24 +19,28 @@ from ..domain.money import quote
 ACTIVE_COUNT = 12
 SHADOW_COUNT = 12
 STARTING_BALANCE = Decimal("10000.00")
-ACTIVE_BASELINE = Decimal("130000.00")  # 12 active + Dark Horse
+# 12 active + Dark Horse + Darkhorse - Daily
+ACTIVE_BASELINE = Decimal("140000.00")
 DARK_HORSE_DISPLAY_NAME = "Dark Horse"
+DARK_HORSE_DAILY_DISPLAY_NAME = "Darkhorse - Daily"
 
 
 @dataclass(frozen=True, slots=True)
 class WalletSlot:
     wallet: Wallet
-    kind: str  # active | shadow | dark_horse
+    kind: str  # active | shadow | dark_horse | dark_horse_daily
     strategy_name: str
     strategy_version_id: str
     activated_at: dt.datetime
 
 
 def display_name(slot: WalletSlot, now: dt.datetime) -> str:
-    """``StrategyName_DaysSinceStrategyChanged`` (Dark Horse is fixed)."""
+    """``StrategyName_DaysSinceStrategyChanged`` (permanent wallets are fixed)."""
 
     if slot.kind == "dark_horse":
         return DARK_HORSE_DISPLAY_NAME
+    if slot.kind == "dark_horse_daily":
+        return DARK_HORSE_DAILY_DISPLAY_NAME
     days = max(0, (now - slot.activated_at).days)
     return f"{slot.strategy_name}_{days}"
 
@@ -45,6 +50,7 @@ class Portfolio:
     active: list[WalletSlot] = field(default_factory=list)
     shadow: list[WalletSlot] = field(default_factory=list)
     dark_horse: WalletSlot | None = None
+    dark_horse_daily: WalletSlot | None = None
 
     def active_equity(self, mark_price: Decimal) -> Decimal:
         total = sum(
@@ -52,6 +58,8 @@ class Portfolio:
         )
         if self.dark_horse is not None:
             total += self.dark_horse.wallet.equity(mark_price)
+        if self.dark_horse_daily is not None:
+            total += self.dark_horse_daily.wallet.equity(mark_price)
         return quote(total)
 
     def shadow_equity(self, mark_price: Decimal) -> Decimal:
@@ -98,6 +106,14 @@ def seed_portfolio(
         kind="dark_horse",
         strategy_name="DarkHorse",
         strategy_version_id="dark-horse-v1",
+        activated_at=now,
+    )
+    portfolio.dark_horse_daily = WalletSlot(
+        wallet=Wallet(id_factory("dark-horse-daily"),
+                      quote_cash=quote(STARTING_BALANCE)),
+        kind="dark_horse_daily",
+        strategy_name="DarkhorseDaily",
+        strategy_version_id="dark-horse-daily-v1",
         activated_at=now,
     )
     return portfolio

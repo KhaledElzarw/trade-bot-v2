@@ -1,3 +1,4 @@
+import os
 import runpy
 import sys
 
@@ -157,7 +158,7 @@ def test_orchestrator_entrypoint_prints_status_for_all_services(monkeypatch, cap
             "capture_output": True,
             "check": True,
         }
-        return Result(f"{args[1].rsplit('/', 1)[-1]}-pid\n")
+        return Result(f"{os.path.basename(args[1])}-pid\n")
 
     monkeypatch.setattr(dashboard_orchestrator.subprocess, "run", fake_run)
     monkeypatch.setattr(sys, "argv", ["dashboard_orchestrator.py", "status"])
