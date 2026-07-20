@@ -95,7 +95,8 @@ def test_shadow_capital_rendered_separately():
 
 
 def test_filters_cover_required_views():
-    for value in ("'active'", "'shadow'", "'dark_horse'", "'archived'", "'all'"):
+    for value in ("'active'", "'shadow'", "'dark_horse'", "'dark_horse_daily'",
+                  "'archived'", "'all'"):
         assert value in CODE
 
 

@@ -1,8 +1,13 @@
 """Local development server for manual dashboard/API testing.
 
-Seeds an in-memory 25-wallet portfolio (12 active + 12 shadow + Dark Horse),
-replays a deterministic synthetic market through the real ExecutionService so
-the wallets hold genuine balances, then serves the API + dashboard.
+Seeds an in-memory 26-wallet portfolio (12 active + 12 shadow + Dark Horse +
+Darkhorse - Daily), replays a deterministic synthetic market through the real
+ExecutionService so the wallets hold genuine balances, then serves the API +
+dashboard. The two permanent wallets trade through the REAL five-domain
+committee (`tradebot.application.dark_horse.synthesize`); the technical and
+liquidity domains are derived from the actual candle window, while the
+macro/fundamental/onchain feeds do not exist in the dev harness and carry
+clearly-labelled synthetic placeholder evidence instead.
 
 Market data is either:
 
@@ -33,14 +38,34 @@ import threading
 import time
 from decimal import Decimal
 
+from dataclasses import dataclass
+
+from ..application.dark_horse import (
+    DEFAULT_CADENCE_SECONDS,
+    DomainSignal,
+    synthesize,
+)
 from ..application.execution import (
     ExecutionModel,
     ExecutionService,
     OrderIntent,
     OrderType,
 )
-from ..application.portfolio import seed_portfolio
+from ..application.portfolio import WalletSlot, seed_portfolio
+from ..domain.dark_horse import (
+    LIQUIDITY,
+    REQUIRED_DOMAINS,
+    TECHNICAL,
+    DarkHorseAction,
+    DomainReport,
+    DomainStatus,
+    EvidenceItem,
+)
+from ..domain.dark_horse_daily import default_params
+from ..domain.ledger import Side
 from ..domain.market import MarketSnapshot
+from ..domain.money import base as base_qty
+from ..domain.money import quote
 from ..domain.strategies import StrategyContext, WalletView
 from ..strategies.builtin import BUILTIN_STRATEGIES
 from .app import create_app
@@ -109,6 +134,139 @@ class MarketDataUnavailable(RuntimeError):
     pass
 
 
+# ---- permanent-wallet committee (Dark Horse + Darkhorse - Daily) -----------
+
+_FLAT_EPSILON = Decimal("0.001")  # <0.1% drift = no directional call
+
+
+def _committee_evidence(
+    window: tuple[MarketSnapshot, ...],
+) -> tuple[dict[str, DomainReport], dict[str, DomainSignal], dt.datetime]:
+    """Five-domain evidence for the dev harness.
+
+    ``technical`` and ``liquidity_derivatives`` are genuinely derived from the
+    candle window (short-horizon drift). The macro/fundamental/onchain feeds do
+    not exist in the dev harness, so those domains carry synthetic placeholder
+    evidence following the long-window drift, with ``source_id`` labelling them
+    as such — the REAL committee logic is exercised, but nothing pretends the
+    dev harness has production data feeds.
+    """
+
+    last = window[-1]
+    now = dt.datetime.fromtimestamp(last.close_time_ms / 1000,
+                                    dt.timezone.utc).replace(tzinfo=None)
+    closes = [c.close for c in window]
+
+    def drift(n: int) -> Decimal:
+        seg = closes[-min(n, len(closes)):]
+        return (seg[-1] - seg[0]) / seg[0]
+
+    # Each domain reads its own horizon so the evidence is not one number
+    # repeated five times: technical/liquidity are short-horizon reads of the
+    # real candles; the placeholder domains follow progressively longer drifts.
+    horizons = {TECHNICAL: 24, LIQUIDITY: 36}
+    placeholder_horizons = {"macro": 288, "bitcoin_fundamental": 144,
+                            "onchain": 72}
+    market_derived = {d: drift(n) for d, n in horizons.items()}
+    moves = {d: market_derived.get(d,
+                                   drift(placeholder_horizons.get(d, len(closes))))
+             for d in REQUIRED_DOMAINS}
+
+    reports: dict[str, DomainReport] = {}
+    signals: dict[str, DomainSignal] = {}
+    for domain, move in moves.items():
+        confidence = min(Decimal("0.85"),
+                         Decimal("0.50") + min(abs(move) * 25, Decimal("0.35")))
+        derived = domain in market_derived
+        reports[domain] = DomainReport(domain, DomainStatus.OK, (EvidenceItem(
+            source_id="dev-market" if derived else "dev-harness-demo",
+            metric=f"{domain}_drift",
+            value=f"{move:.6f}",
+            interpretation=("candle-window drift" if derived
+                            else "synthetic dev placeholder"),
+            confidence=confidence,
+            source_time=now,
+            retrieved_at=now,
+            data_snapshot_id=last.snapshot_id,
+        ),))
+        bullish = None if abs(move) < _FLAT_EPSILON else move > 0
+        signals[domain] = DomainSignal(domain, bullish, confidence)
+    return reports, signals, now
+
+
+@dataclass
+class _PermanentRunner:
+    """Cadenced committee loop for one permanent wallet."""
+
+    slot: WalletSlot
+    cadence_seconds: int
+    accumulate_fraction: Decimal
+    reduce_fraction: Decimal
+    last_eval_ms: int | None = None
+
+
+def _permanent_committee_intent(
+    runner: _PermanentRunner,
+    snapshot: MarketSnapshot,
+    window: tuple[MarketSnapshot, ...],
+) -> tuple[Side, Decimal, str] | None:
+    """Evaluate the committee on cadence; map the decision to a spot order."""
+
+    if (runner.last_eval_ms is not None
+            and snapshot.close_time_ms - runner.last_eval_ms
+            < runner.cadence_seconds * 1000):
+        return None
+    runner.last_eval_ms = snapshot.close_time_ms
+
+    wallet = runner.slot.wallet
+    reports, signals, now = _committee_evidence(window)
+    decision = synthesize(
+        reports, signals, now=now,
+        strategy_version_id=runner.slot.strategy_version_id,
+        holds_btc=wallet.base_qty > 0,
+    )
+    px = snapshot.mark_price
+    if decision.action is DarkHorseAction.ACCUMULATE:
+        budget = quote(wallet.quote_cash * runner.accumulate_fraction)
+        if budget < Decimal("10"):
+            return None
+        qty = base_qty(budget / px)
+        side = Side.BUY
+    elif decision.action is DarkHorseAction.REDUCE:
+        qty = base_qty(wallet.base_qty * runner.reduce_fraction)
+        side = Side.SELL
+    elif decision.action is DarkHorseAction.EXIT_TO_CASH:
+        qty = base_qty(wallet.base_qty)
+        side = Side.SELL
+    else:
+        return None
+    if qty <= 0:
+        return None
+    return side, qty, decision.action.value
+
+
+def _permanent_runners(portfolio) -> list[_PermanentRunner]:
+    """Dark Horse on its 4h cadence; Darkhorse - Daily on its tuned cadence."""
+
+    runners = []
+    if portfolio.dark_horse is not None:
+        runners.append(_PermanentRunner(
+            slot=portfolio.dark_horse,
+            cadence_seconds=DEFAULT_CADENCE_SECONDS,
+            accumulate_fraction=Decimal("0.25"),
+            reduce_fraction=Decimal("0.50"),
+        ))
+    if portfolio.dark_horse_daily is not None:
+        params = default_params()
+        runners.append(_PermanentRunner(
+            slot=portfolio.dark_horse_daily,
+            cadence_seconds=int(params["signal_cadence_hours"] * 3600),
+            accumulate_fraction=params["accumulate_fraction"],
+            reduce_fraction=params["reduce_fraction"],
+        ))
+    return runners
+
+
 def build_view(now: dt.datetime, live: bool = False,
                interval: str = "5m") -> InMemoryPortfolioView:
     filters = None
@@ -139,6 +297,7 @@ def build_view(now: dt.datetime, live: bool = False,
     for slot in portfolio.active + portfolio.shadow:
         strategy = by_name[slot.strategy_name]()
         runners.append((slot, strategy, strategy.initialize()))
+    permanents = _permanent_runners(portfolio)
 
     # Live mode uses the REAL exchange filters (Binance's actual LOT_SIZE step is
     # 0.00001, not the 1-satoshi default), so fills obey the true venue rules.
@@ -169,14 +328,34 @@ def build_view(now: dt.datetime, live: bool = False,
                     quantity=spec.quantity, limit_price=spec.limit_price,
                     reason_code=spec.reason_code,
                 )))
+        # Permanent wallets trade against the SAME snapshot, via the real
+        # five-domain committee on their own cadences.
+        for pr in permanents:
+            order = _permanent_committee_intent(pr, snapshot, window)
+            if order is None:
+                continue
+            side, qty, reason = order
+            seq += 1
+            batch.append((pr.slot.wallet, OrderIntent(
+                intent_id=f"dev-i{seq}", wallet_id=pr.slot.wallet.wallet_id,
+                strategy_version_id=pr.slot.strategy_version_id,
+                side=side, order_type=OrderType.MARKET,
+                quantity=qty, limit_price=None,
+                reason_code=f"committee_{reason}",
+            )))
         for result in execution.process_tick(snapshot, batch):
             fills += result.accepted
 
     mark = market[-1].mark_price
     print(f"[devserver] replayed {n} candles across "
-          f"{len(portfolio.active) + len(portfolio.shadow)} wallets -> {fills} fills")
+          f"{len(portfolio.active) + len(portfolio.shadow) + len(permanents)} "
+          f"wallets -> {fills} fills")
     print(f"[devserver] mark price {mark}  active equity "
           f"{portfolio.active_equity(mark)}  shadow {portfolio.shadow_equity(mark)}")
+    for pr in permanents:
+        w = pr.slot.wallet
+        print(f"[devserver] {pr.slot.strategy_name}: equity {w.equity(mark)}  "
+              f"btc {w.base_qty}  usdt {w.quote_cash}")
 
     llm_healthy, llm_model = probe_local_llm()
 

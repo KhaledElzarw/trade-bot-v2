@@ -132,6 +132,19 @@ function renderSummary(root, data) {
       ],
     }));
   }
+
+  const dhd = data.dark_horse_daily;
+  if (dhd) {
+    root.appendChild(el('section', {
+      className: 'summary summary--darkhorse',
+      attrs: { 'aria-labelledby': 'dhd-heading' },
+      children: [
+        el('h2', { text: 'Darkhorse - Daily', attrs: { id: 'dhd-heading' } }),
+        metric('Current equity', dhd.current_equity),
+        metric('Lifetime P&L', dhd.lifetime_net_pnl),
+      ],
+    }));
+  }
 }
 
 function metric(label, value) {
@@ -204,6 +217,7 @@ const FILTERS = [
   ['active', 'All active'],
   ['shadow', 'All shadow'],
   ['dark_horse', 'Dark Horse'],
+  ['dark_horse_daily', 'Darkhorse - Daily'],
   ['archived', 'Archived'],
 ];
 
