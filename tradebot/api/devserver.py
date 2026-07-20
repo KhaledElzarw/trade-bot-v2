@@ -79,29 +79,51 @@ from .views import InMemoryPortfolioView, money
 DEV_TOKEN = "dev-local-token-not-a-secret-0123456789"  # nosec B105
 N_CANDLES = 400
 WINDOW = 150
+FIVE_MIN_MS = 300_000  # 5-minute candle spacing, in milliseconds
 
 
-def _candle(i: int, close: float, hi: float, lo: float, vol: float) -> MarketSnapshot:
+def _candle(i: int, close: float, hi: float, lo: float, vol: float,
+            open_ms: int | None = None) -> MarketSnapshot:
+    # ``open_ms`` anchors the candle in real time. When omitted it falls back to
+    # the legacy epoch-relative spacing (i * 5m), which is fine for unit tests
+    # that only care about candle ordering, not wall-clock timestamps.
+    open_ms = i * FIVE_MIN_MS if open_ms is None else open_ms
+    close_ms = open_ms + FIVE_MIN_MS
     c = Decimal(f"{close:.2f}")
     return MarketSnapshot(
         snapshot_id=f"dev-c{i}", source="synthetic-dev", symbol="BTCUSDT",
-        interval="5m", open_time_ms=i * 300_000, close_time_ms=(i + 1) * 300_000,
+        interval="5m", open_time_ms=open_ms, close_time_ms=close_ms,
         is_closed=True, open=c, high=c + Decimal(f"{hi:.2f}"),
         low=c - Decimal(f"{lo:.2f}"), close=c, volume=Decimal(f"{vol:.2f}"),
-        retrieved_at_ms=(i + 1) * 300_000, source_time_ms=(i + 1) * 300_000,
+        retrieved_at_ms=close_ms, source_time_ms=close_ms,
     )
 
 
-def build_market(seed: int = 7) -> tuple[MarketSnapshot, ...]:
+def build_market(seed: int = 7, *,
+                 end_ms: int | None = None) -> tuple[MarketSnapshot, ...]:
+    """Deterministic synthetic BTCUSDT walk.
+
+    ``end_ms`` is the close time of the LAST candle. Pass ``now`` (aligned to a
+    5-minute boundary) so the synthetic history reads with real recent
+    timestamps offline, matching how live mode looks. Omit it for the legacy
+    epoch-relative timeline used by tests.
+    """
+
     # nosec B311 - deterministic REPRODUCIBILITY is the point here; this seeds a
     # synthetic demo market, never a security or trading decision.
     rng = random.Random(seed)  # nosec B311
+    if end_ms is None:
+        start_open_ms = 0
+    else:
+        # end_ms is the last candle's CLOSE; walk back N candles to candle 0's open.
+        start_open_ms = end_ms - N_CANDLES * FIVE_MIN_MS
     px = 60_000.0
     out = []
     for i in range(N_CANDLES):
         px *= 1 + rng.uniform(-0.004, 0.0043)
         out.append(_candle(i, px, rng.uniform(5, 60), rng.uniform(5, 60),
-                           rng.uniform(5, 30)))
+                           rng.uniform(5, 30),
+                           open_ms=start_open_ms + i * FIVE_MIN_MS))
     return tuple(out)
 
 
@@ -359,7 +381,12 @@ def build_view(now: dt.datetime, live: bool = False,
                   f"{exc}) -> refusing to fall back silently")
             raise
     else:
-        market = build_market()
+        # Anchor the synthetic history so its timestamps end at ``now`` (aligned
+        # to a 5-minute boundary), so the order history reads with real recent
+        # times offline instead of 1970.
+        now_ms = int(now.replace(tzinfo=dt.timezone.utc).timestamp() * 1000)
+        end_ms = now_ms - (now_ms % FIVE_MIN_MS)
+        market = build_market(end_ms=end_ms)
 
     names = [c().metadata().name for c in BUILTIN_STRATEGIES]
     # Assignments are backdated so the display-name day counter is non-zero.
@@ -545,6 +572,29 @@ def probe_local_llm() -> tuple[bool, str]:
     return True, model_id
 
 
+def _port_in_use(host: str, port: int) -> bool:
+    """True if something is already listening on host:port.
+
+    Guards against the confusing failure mode where a stale devserver keeps
+    serving OLD in-memory code on the port while a fresh start silently loses
+    the bind race — the exact trap behind the earlier 'Dark Horse frozen' report.
+    """
+
+    import socket
+
+    try:
+        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except socket.gaierror:
+        return False  # unresolvable host: let uvicorn surface the real error
+    for family, socktype, proto, _canon, sockaddr in infos:
+        with socket.socket(family, socktype, proto) as probe:
+            try:
+                probe.bind(sockaddr)
+            except OSError:
+                return True
+    return False
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="tradebot-devserver")
     parser.add_argument("--port", type=int, default=5555)
@@ -554,6 +604,14 @@ def main(argv: list[str] | None = None) -> int:
                              "(no credentials required)")
     parser.add_argument("--interval", default="5m")
     args = parser.parse_args(argv)
+
+    # Fail fast (before the expensive market replay) if the port is taken, so a
+    # stale process can't keep serving old code under a "started fine" illusion.
+    if _port_in_use(args.host, args.port):
+        print(f"[devserver] ERROR: {args.host}:{args.port} is already in use.")
+        print("[devserver] A stale devserver may still be serving OLD code there.")
+        print("[devserver] Stop that process (or pass a different --port), then retry.")
+        return 1
 
     import uvicorn
 

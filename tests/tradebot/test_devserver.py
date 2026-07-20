@@ -8,11 +8,17 @@ runs both permanent wallets through the real five-domain committee.
 import datetime as dt
 from decimal import Decimal
 
+import socket
+
 from tradebot.api.devserver import (
+    FIVE_MIN_MS,
+    N_CANDLES,
     _candle,
     _committee_evidence,
     _permanent_committee_intent,
     _permanent_runners,
+    _port_in_use,
+    build_market,
     build_view,
 )
 from tradebot.application.portfolio import WalletSlot, seed_portfolio
@@ -90,3 +96,32 @@ def test_build_view_replay_trades_both_permanent_wallets():
     # Deterministic seeded replay: both permanent wallets actually traded.
     assert view.portfolio.dark_horse.wallet.base_qty > 0
     assert view.portfolio.dark_horse_daily.wallet.base_qty > 0
+
+
+def test_build_market_anchors_last_candle_close_to_end_ms():
+    end_ms = 1_800_000_000_000  # arbitrary wall-clock anchor
+    market = build_market(end_ms=end_ms)
+    assert len(market) == N_CANDLES
+    # Last candle closes exactly at the anchor; candle 0 opens N candles earlier.
+    assert market[-1].close_time_ms == end_ms
+    assert market[0].open_time_ms == end_ms - N_CANDLES * FIVE_MIN_MS
+    # Legacy epoch-relative timeline is preserved when no anchor is given.
+    assert build_market()[0].open_time_ms == 0
+
+
+def test_synthetic_history_timestamps_are_recent_not_1970():
+    view = build_view(NOW)  # synthetic (offline) mode
+    orders = view.wallet_orders(view.portfolio.dark_horse.wallet.wallet_id)
+    assert orders, "expected recorded trades"
+    # Newest trade lands on the harness 'now' day, not the 1970 epoch.
+    assert orders[0]["placed_at"].startswith("2026-07-")
+
+
+def test_port_in_use_detects_a_bound_socket():
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        s.listen(1)
+        port = s.getsockname()[1]
+        assert _port_in_use("127.0.0.1", port) is True
+    # Once released, the same port is free again.
+    assert _port_in_use("127.0.0.1", port) is False
