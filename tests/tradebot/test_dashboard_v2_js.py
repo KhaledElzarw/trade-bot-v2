@@ -112,6 +112,16 @@ def test_new_columns_and_sorting_are_present():
     assert "bs__buy" in CODE and "bs__sell" in CODE
 
 
+def test_realtime_refresh_and_insights_present():
+    # Insights section + card renderer.
+    assert "renderInsights" in CODE and "/portfolio/insights" in CODE
+    # Live polling: interval, hidden-tab skip, and visibility re-fetch.
+    assert "setInterval" in CODE
+    assert "visibilityState" in CODE and "visibilitychange" in CODE
+    # Live status indicator hooks.
+    assert "live-status" in CODE and "live-dot" in CODE
+
+
 def test_legacy_v1_dashboard_still_present_but_v2_is_clean():
     """The v1 file retains its innerHTML usage; v2 must not inherit it."""
     v1 = V2.with_name("dashboard.v1.js")

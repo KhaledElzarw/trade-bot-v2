@@ -12,11 +12,17 @@
   <header class="masthead">
     <h1>Evolutionary Multi-Wallet Portfolio</h1>
     <p class="subtitle">BTCUSDT paper trading — research simulator. No real orders are placed.</p>
+    <div id="live-status" class="live-status" role="status" aria-live="polite"></div>
   </header>
 
   <main>
     <section id="summary" aria-label="Portfolio summary" class="summary-grid">
       <!-- populated by dashboard.v2.js via textContent -->
+    </section>
+
+    <section aria-labelledby="insights-heading">
+      <h2 id="insights-heading">Insights</h2>
+      <div id="insights" class="insights-grid"></div>
     </section>
 
     <section aria-labelledby="wallets-heading">

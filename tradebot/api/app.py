@@ -130,6 +130,10 @@ def _register_routes(app: FastAPI, view: PortfolioView, require_token) -> None:
     def portfolio_summary() -> dict:
         return view.portfolio_summary()
 
+    @app.get("/api/v2/portfolio/insights")
+    def portfolio_insights() -> dict:
+        return view.portfolio_insights()
+
     @app.get("/api/v2/wallets")
     def wallets(kind: str | None = None) -> dict:
         return {"wallets": view.wallets(kind=kind)}

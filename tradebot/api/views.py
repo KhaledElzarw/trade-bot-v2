@@ -19,6 +19,7 @@ from ..application.portfolio import (
     Portfolio,
     display_name,
 )
+from ..domain.money import quote
 
 
 def money(value: Decimal) -> str:
@@ -35,6 +36,7 @@ def money(value: Decimal) -> str:
 class PortfolioView(Protocol):  # pragma: no cover - structural protocol
     def readiness(self) -> dict: ...
     def portfolio_summary(self) -> dict: ...
+    def portfolio_insights(self) -> dict: ...
     def wallets(self, kind: str | None = None) -> list[dict]: ...
     def wallet(self, wallet_id: str) -> dict | None: ...
     def wallet_equity(self, wallet_id: str) -> list[dict]: ...
@@ -131,6 +133,76 @@ class InMemoryPortfolioView:
             "display_name": display_name(slot, self.now),
             "current_equity": money(equity),
             "lifetime_net_pnl": money(equity - Decimal("10000.00")),
+        }
+
+    def portfolio_insights(self) -> dict:
+        """Portfolio-level analytics over the REAL book (12 active + the two
+        permanent wallets). Shadow is virtual and excluded from these figures."""
+
+        mark = self.mark_price
+        start = Decimal("10000.00")
+        real = list(self.portfolio.active)
+        if self.portfolio.dark_horse is not None:
+            real.append(self.portfolio.dark_horse)
+        if self.portfolio.dark_horse_daily is not None:
+            real.append(self.portfolio.dark_horse_daily)
+
+        def fills_of(slot) -> int:
+            return sum(1 for t in self.trades_by_wallet.get(slot.wallet.wallet_id, [])
+                       if t.get("status") == "filled")
+
+        ranked = sorted(
+            ((display_name(s, self.now), s.wallet.equity(mark) - start, s)
+             for s in real),
+            key=lambda r: r[1], reverse=True)
+        top, worst = ranked[0], ranked[-1]
+        in_profit = sum(1 for _, p, _ in ranked if p > 0)
+
+        realized = sum((s.wallet.realized_pnl for s in real), Decimal("0"))
+        unrealized = sum((s.wallet.unrealized_pnl(mark) for s in real), Decimal("0"))
+        fees = sum((s.wallet.total_fees for s in real), Decimal("0"))
+        total_btc = sum((s.wallet.base_qty for s in real), Decimal("0"))
+        btc_value = quote(total_btc * mark)
+        real_equity = sum((s.wallet.equity(mark) for s in real), Decimal("0"))
+        pct_in_btc = (btc_value / real_equity * 100) if real_equity > 0 else Decimal("0")
+        net = real_equity - start * len(real)
+
+        # Activity + resting orders span EVERY wallet (including shadow).
+        all_slots = [s for s, _ in self._slots()]
+        total_fills = sum(fills_of(s) for s in all_slots)
+        open_buy = open_sell = 0
+        for s in all_slots:
+            for o in self.open_orders_by_wallet.get(s.wallet.wallet_id, []):
+                if o.get("side") == "BUY":
+                    open_buy += 1
+                else:
+                    open_sell += 1
+
+        most_active = max(real, key=fills_of)
+
+        def perf(slot) -> dict:
+            return {"display_name": display_name(slot, self.now),
+                    "lifetime_net_pnl": money(slot.wallet.equity(mark) - start)}
+
+        return {
+            "net_pnl": money(net),
+            "realized_pnl": money(realized),
+            "unrealized_pnl": money(unrealized),
+            "top_performer": {"display_name": top[0], "lifetime_net_pnl": money(top[1])},
+            "worst_performer": {"display_name": worst[0], "lifetime_net_pnl": money(worst[1])},
+            "wallets_in_profit": {"count": in_profit, "total": len(real)},
+            "total_fills": total_fills,
+            "total_fees": money(fees),
+            "btc_exposure": {"btc": money(total_btc), "value": money(btc_value),
+                             "pct_in_btc": f"{pct_in_btc:.1f}%"},
+            "open_orders": {"total": open_buy + open_sell,
+                            "buys": open_buy, "sells": open_sell},
+            "most_active": {"display_name": display_name(most_active, self.now),
+                            "fills": fills_of(most_active)},
+            "dark_horse": (perf(self.portfolio.dark_horse)
+                           if self.portfolio.dark_horse is not None else None),
+            "dark_horse_daily": (perf(self.portfolio.dark_horse_daily)
+                                 if self.portfolio.dark_horse_daily is not None else None),
         }
 
     # -- wallets -------------------------------------------------------------

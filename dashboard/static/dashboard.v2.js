@@ -496,44 +496,148 @@ if (typeof document !== 'undefined') {
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeWalletDetail(); });
 }
 
+/* ---------------------------------------------------------------- insights */
+
+const INSIGHT_CARDS = [
+  { key: 'net_pnl', label: 'Net P&L', signed: true, sub: (d) =>
+      `Realized ${d.realized_pnl} · Unrealized ${d.unrealized_pnl}` },
+  { key: 'top_performer', label: 'Top performer',
+    value: (d) => d.top_performer && d.top_performer.lifetime_net_pnl, signed: true,
+    sub: (d) => d.top_performer && d.top_performer.display_name },
+  { key: 'worst_performer', label: 'Worst performer',
+    value: (d) => d.worst_performer && d.worst_performer.lifetime_net_pnl, signed: true,
+    sub: (d) => d.worst_performer && d.worst_performer.display_name },
+  { key: 'wallets_in_profit', label: 'Wallets in profit',
+    value: (d) => d.wallets_in_profit && `${d.wallets_in_profit.count}/${d.wallets_in_profit.total}`,
+    sub: () => 'of the real book' },
+  { key: 'total_fills', label: 'Total fills',
+    value: (d) => d.total_fills, sub: (d) => `Fees paid ${d.total_fees}` },
+  { key: 'btc_exposure', label: 'BTC exposure',
+    value: (d) => d.btc_exposure && d.btc_exposure.value,
+    sub: (d) => d.btc_exposure && `${d.btc_exposure.btc} BTC · ${d.btc_exposure.pct_in_btc} of equity` },
+  { key: 'open_orders', label: 'Resting orders', splitOrders: true,
+    sub: (d) => d.open_orders && `${d.open_orders.total} total` },
+  { key: 'most_active', label: 'Most active',
+    value: (d) => d.most_active && `${d.most_active.fills} fills`,
+    sub: (d) => d.most_active && d.most_active.display_name },
+  { key: 'dark_horse', label: 'Dark Horse',
+    value: (d) => d.dark_horse && d.dark_horse.lifetime_net_pnl, signed: true,
+    sub: () => 'permanent · committee' },
+  { key: 'dark_horse_daily', label: 'Darkhorse - Daily',
+    value: (d) => d.dark_horse_daily && d.dark_horse_daily.lifetime_net_pnl, signed: true,
+    sub: () => 'permanent · adaptive' },
+];
+
+/** Colour a signed money string green/red (neutral when zero/–). */
+function signClass(value) {
+  const n = parseFloat(value);
+  if (isNaN(n) || n === 0) return '';
+  return n > 0 ? 'pos' : 'neg';
+}
+
+function renderInsights(root, data) {
+  clear(root);
+  if (!data) { root.appendChild(emptyNode('Insights unavailable.')); return; }
+  for (const card of INSIGHT_CARDS) {
+    const valueNode = el('span', { className: 'insight-card__value' });
+    if (card.splitOrders && data.open_orders) {
+      valueNode.appendChild(buySellNode(data.open_orders.buys, data.open_orders.sells));
+    } else {
+      const v = card.value ? card.value(data) : data[card.key];
+      valueNode.textContent = v === undefined || v === null ? '—' : v;
+      const cls = card.signed ? signClass(v) : '';
+      if (cls) valueNode.classList.add(cls);
+    }
+    const sub = card.sub ? card.sub(data) : null;
+    root.appendChild(el('div', {
+      className: 'insight-card',
+      children: [
+        el('span', { className: 'insight-card__label', text: card.label }),
+        valueNode,
+        sub ? el('span', { className: 'insight-card__sub', text: sub }) : null,
+      ],
+    }));
+  }
+}
+
 /* -------------------------------------------------------------- controller */
 
-async function load(state) {
+function setLiveStatus(root, kind, message) {
+  if (!root) return;
+  clear(root);
+  root.setAttribute('data-state', kind);
+  root.appendChild(el('span', { className: 'live-dot' }));
+  root.appendChild(el('span', { text: message }));
+}
+
+async function refresh(state) {
   const walletRoot = document.getElementById('wallets');
   const summaryRoot = document.getElementById('summary');
+  const insightsRoot = document.getElementById('insights');
+  const liveRoot = document.getElementById('live-status');
   if (!walletRoot || !summaryRoot) return;
 
-  clear(walletRoot);
-  walletRoot.appendChild(loadingNode());
+  if (state.first) {
+    walletRoot.appendChild(loadingNode());
+    if (insightsRoot) insightsRoot.appendChild(loadingNode());
+  }
 
+  let ok = true;
   try {
-    const summary = await getJson('/portfolio/summary');
-    renderSummary(summaryRoot, summary);
-  } catch {
-    clear(summaryRoot);
-    summaryRoot.appendChild(errorNode('Could not load portfolio summary.'));
+    renderSummary(summaryRoot, await getJson('/portfolio/summary'));
+  } catch { ok = false; clear(summaryRoot); summaryRoot.appendChild(errorNode('Could not load portfolio summary.')); }
+
+  if (insightsRoot) {
+    try {
+      renderInsights(insightsRoot, await getJson('/portfolio/insights'));
+    } catch { ok = false; clear(insightsRoot); insightsRoot.appendChild(errorNode('Could not load insights.')); }
   }
 
   try {
     const query = state.filter === 'all' ? '' : `?kind=${encodeURIComponent(state.filter)}`;
     const data = await getJson(`/wallets${query}`);
-    renderWallets(walletRoot, data.wallets, openWalletDetail);
-  } catch {
-    clear(walletRoot);
-    walletRoot.appendChild(errorNode('Could not load wallets.'));
+    renderWallets(walletRoot, data.wallets, openWalletDetail, state.sort);
+  } catch { ok = false; clear(walletRoot); walletRoot.appendChild(errorNode('Could not load wallets.')); }
+
+  state.first = false;
+  if (ok) {
+    state.lastOk = Date.now();
+    setLiveStatus(liveRoot, 'live', 'Live');
+  } else if (state.lastOk) {
+    const secs = Math.round((Date.now() - state.lastOk) / 1000);
+    setLiveStatus(liveRoot, 'stale', `Reconnecting… last update ${secs}s ago`);
+  } else {
+    setLiveStatus(liveRoot, 'error', 'Offline');
   }
 }
 
+const REFRESH_MS = 10000;
+
 function init() {
-  const state = { filter: 'active' };
+  const state = { filter: 'active', sort: { key: null, dir: 'asc' }, first: true, lastOk: 0 };
   const filterRoot = document.getElementById('filters');
   const onChange = (value) => {
     state.filter = value;
     if (filterRoot) renderFilters(filterRoot, state.filter, onChange);
-    load(state);
+    refresh(state);
   };
   if (filterRoot) renderFilters(filterRoot, state.filter, onChange);
-  load(state);
+  refresh(state);
+
+  // Poll for live updates; skip while the tab is hidden to save work, and
+  // refresh immediately when it becomes visible again.
+  if (typeof setInterval !== 'undefined') {
+    setInterval(() => {
+      if (typeof document === 'undefined' || document.visibilityState !== 'hidden') {
+        refresh(state);
+      }
+    }, REFRESH_MS);
+  }
+  if (typeof document !== 'undefined') {
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') refresh(state);
+    });
+  }
 }
 
 if (typeof document !== 'undefined' && document.readyState !== 'loading') {
@@ -544,5 +648,5 @@ if (typeof document !== 'undefined' && document.readyState !== 'loading') {
 
 /* Exported for tests (Node/jsdom). */
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { el, clear, safeUrl, safeLink, renderSummary, renderWallets, renderFilters, stateNode, renderWalletDetail, insightGrid, orderTable };
+  module.exports = { el, clear, safeUrl, safeLink, renderSummary, renderWallets, renderFilters, stateNode, renderWalletDetail, insightGrid, orderTable, renderInsights, buySellNode };
 }

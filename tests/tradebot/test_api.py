@@ -206,6 +206,22 @@ def test_wallet_detail_and_404():
     assert c.get("/api/v2/wallets/nope").status_code == 404
 
 
+def test_portfolio_insights_shape_and_route():
+    view = make_view()
+    ins = view.portfolio_insights()
+    assert set(ins) >= {
+        "net_pnl", "realized_pnl", "unrealized_pnl", "top_performer",
+        "worst_performer", "wallets_in_profit", "total_fills", "total_fees",
+        "btc_exposure", "open_orders", "most_active", "dark_horse",
+        "dark_horse_daily"}
+    # Real book = 12 active + Dark Horse + Darkhorse - Daily.
+    assert ins["wallets_in_profit"]["total"] == 14
+    oo = ins["open_orders"]
+    assert oo["total"] == oo["buys"] + oo["sells"]
+    assert "%" in ins["btc_exposure"]["pct_in_btc"]
+    assert client().get("/api/v2/portfolio/insights").status_code == 200
+
+
 def test_wallet_drilldown_exposes_orders_insights_and_description():
     view = make_view()
     wid = view.portfolio.active[0].wallet.wallet_id
