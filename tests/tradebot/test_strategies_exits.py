@@ -112,6 +112,49 @@ def test_cooldown_blocks_repeat_entries():
     assert second.intents == ()  # inside cooldown
 
 
+def test_bar_ordinal_is_window_independent():
+    """The clock must count elapsed candles, not the trailing window length."""
+
+    full = series(flat(200))
+    # Same newest candle (index 149) seen with a huge window vs a 20-candle cap.
+    wide = full[:150]
+    narrow = full[130:150]
+    assert BuiltinStrategy.bar_ordinal(wide[-1], wide) == 149
+    assert BuiltinStrategy.bar_ordinal(narrow[-1], narrow) == 149  # not len()==20
+
+
+def test_cooldown_rearms_under_a_bounded_window():
+    """Regression: with a capped trailing window, len(candles) flatlines and the
+    entry cooldown used to jam shut forever. The time-based clock must let a new
+    entry through once the cooldown has genuinely elapsed."""
+
+    class AlwaysBuy(BuiltinStrategy):
+        min_warmup = 2
+        cooldown_candles = 5
+
+        def signal(self, context, candles, state, *, holding):
+            return [self.buy_intent(context, "always")]
+
+    strategy = AlwaysBuy()
+    full = series(flat(40))
+    state = strategy.initialize()
+    window = 10  # the caller only ever hands over the last 10 candles
+
+    entries = []
+    for end in range(window, len(full) + 1):
+        candles = full[end - window:end]  # len is CONSTANT at 10
+        decision = strategy.on_market_snapshot(context_for(candles), state)
+        state = decision.state
+        if decision.intents:
+            entries.append(end)
+
+    # First entry immediately, then one every 5 candles of elapsed TIME — not a
+    # single front-loaded burst that then freezes.
+    assert entries[0] == window
+    gaps = {b - a for a, b in zip(entries, entries[1:])}
+    assert gaps == {5}, f"cooldown should re-arm every 5 bars, got {sorted(entries)}"
+
+
 def test_none_intents_are_filtered():
     class YieldsNone(BuiltinStrategy):
         min_warmup = 2

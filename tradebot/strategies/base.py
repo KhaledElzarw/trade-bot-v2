@@ -76,7 +76,7 @@ class BuiltinStrategy:
         if not context.snapshot.is_closed or len(candles) < self.min_warmup:
             return StrategyDecision(state=state)
 
-        index = len(candles)
+        index = self.bar_ordinal(context.snapshot, candles)
         holding = context.wallet.base_qty > 0
         new_state = dict(state)
         if holding:
@@ -104,6 +104,30 @@ class BuiltinStrategy:
                candles: tuple[MarketSnapshot, ...],
                state: dict[str, Any], *, holding: bool) -> list[IntentSpec | None]:
         raise NotImplementedError
+
+    @staticmethod
+    def bar_ordinal(snapshot: MarketSnapshot,
+                    candles: tuple[MarketSnapshot, ...]) -> int:
+        """A monotonic, window-independent candle clock.
+
+        Time-based gates (entry cooldowns, grid re-centres, signal re-arming)
+        must measure ELAPSED candles, not the length of the trailing window they
+        happen to be handed. ``len(candles)`` conflates the two: once the caller
+        caps the window (the dev harness feeds only the last 150 candles) its
+        length flatlines, every ``index - last >= N`` gate reads "no time has
+        passed", and the strategy stops trading after the window fills. This
+        derives the ordinal from the newest candle's open time and the candle
+        spacing instead, so it keeps climbing across the whole run regardless of
+        how much history is retained.
+        """
+
+        if len(candles) >= 2:
+            step = candles[-1].open_time_ms - candles[-2].open_time_ms
+            if step > 0:
+                return snapshot.open_time_ms // step
+        # Degenerate fallback (single candle / zero spacing): still monotonic in
+        # open time, so gates never freeze even here.
+        return snapshot.open_time_ms
 
     @staticmethod
     def entry_price(state: dict[str, Any]) -> Decimal | None:

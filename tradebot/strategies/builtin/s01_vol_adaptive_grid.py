@@ -39,7 +39,7 @@ class VolAdaptiveGrid(BuiltinStrategy):
         vol = atr(candles, self.atr_period)
         if vol is None or vol == 0:
             return []
-        index = len(candles)
+        index = self.bar_ordinal(context.snapshot, candles)
 
         anchor = Decimal(state["anchor"]) if state.get("anchor") else None
         if anchor is None or (
