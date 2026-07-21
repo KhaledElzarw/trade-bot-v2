@@ -26,6 +26,9 @@ class VolAdaptiveGrid(BuiltinStrategy):
     recenter_min_candles = 20
     max_inventory_fraction = Decimal("0.75")  # stop buying past this equity share
     min_edge = Decimal("0.004")  # fee-aware minimum edge for grid sells
+    # A grid is the canonical resting-order strategy: bids rest below, asks above.
+    entry_limit_bps = Decimal("10")
+    exit_limit_bps = Decimal("10")
 
     def initialize(self) -> dict[str, Any]:
         state = super().initialize()
@@ -62,14 +65,16 @@ class VolAdaptiveGrid(BuiltinStrategy):
         buy_level = anchor - spacing * (Decimal(1) + inventory_ratio)
         if close <= buy_level and inventory_ratio < self.max_inventory_fraction:
             intents.append(self.buy_intent(context, "grid_buy",
-                                           fraction=Decimal("0.15")))
+                                           fraction=Decimal("0.15"),
+                                           limit_bps=self.entry_limit_bps))
         # SELL: only against owned BTC, above anchor plus spacing with fee edge.
         sell_level = anchor + spacing
         entry = self.entry_price(state)
         if holding and close >= sell_level and (
             entry is None or close >= entry * (Decimal(1) + self.min_edge)
         ):
-            intents.append(self.sell_all_intent(context, "grid_sell"))
+            intents.append(self.sell_all_intent(context, "grid_sell",
+                                                limit_bps=self.exit_limit_bps))
         return intents
 
 

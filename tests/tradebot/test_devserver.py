@@ -109,6 +109,17 @@ def test_build_market_anchors_last_candle_close_to_end_ms():
     assert build_market()[0].open_time_ms == 0
 
 
+def test_replay_produces_resting_open_orders():
+    view = build_view(NOW)  # synthetic, deterministic seed
+    total = sum(len(view.wallet_open_orders(w["wallet_id"]))
+                for w in view.wallets())
+    assert total >= 1, "expected at least one resting limit order at the snapshot"
+    for w in view.wallets():
+        for o in view.wallet_open_orders(w["wallet_id"]):
+            assert o["order_type"] == "LIMIT" and o["status"] == "open"
+            assert Decimal(o["limit_price"]) > 0
+
+
 def test_synthetic_history_timestamps_are_recent_not_1970():
     view = build_view(NOW)  # synthetic (offline) mode
     orders = view.wallet_orders(view.portfolio.dark_horse.wallet.wallet_id)

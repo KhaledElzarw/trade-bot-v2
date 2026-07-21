@@ -51,6 +51,7 @@ from ..application.execution import (
     OrderIntent,
     OrderType,
 )
+from ..application.order_book import RestingBook, RestingOrder
 from ..application.portfolio import WalletSlot, seed_portfolio
 from ..domain.dark_horse import (
     LIQUIDITY,
@@ -173,10 +174,16 @@ def _realized_from_txn(txn) -> Decimal:
 
 
 def _trade_record(snapshot: MarketSnapshot, intent: OrderIntent,
-                  result) -> dict:
-    """One row of a wallet's order history: what was asked, what happened."""
+                  result, placed_ms: int | None = None) -> dict:
+    """One row of a wallet's order history: what was asked, what happened.
+
+    ``placed_ms`` is the open time of the candle the order was PLACED on — it
+    differs from the fill candle for a resting limit order. When omitted the
+    order was placed and resolved on the same candle (a market order).
+    """
 
     ts = _iso(snapshot.close_time_ms)
+    placed_at = _iso(placed_ms + FIVE_MIN_MS) if placed_ms is not None else ts
     filled = result.accepted
     txn = result.transaction
     price = result.fill_price
@@ -185,7 +192,7 @@ def _trade_record(snapshot: MarketSnapshot, intent: OrderIntent,
                 if (price is not None and filled) else None)
     return {
         "order_id": intent.intent_id,
-        "placed_at": ts,
+        "placed_at": placed_at,
         "filled_at": ts if filled else None,
         "side": intent.side.value,
         "order_type": intent.order_type.value,
@@ -200,6 +207,27 @@ def _trade_record(snapshot: MarketSnapshot, intent: OrderIntent,
         "strategy_version_id": intent.strategy_version_id,
         "realized_pnl": (money(_realized_from_txn(txn))
                          if txn is not None else None),
+    }
+
+
+def _expired_record(snapshot: MarketSnapshot, order) -> dict:
+    """History row for a resting limit order that timed out unfilled."""
+
+    return {
+        "order_id": order.order_id,
+        "placed_at": _iso(order.placed_open_ms + FIVE_MIN_MS),
+        "filled_at": None,
+        "side": order.side.value,
+        "order_type": "LIMIT",
+        "requested_qty": money(order.quantity),
+        "filled_qty": "0.00000000",
+        "price": money(order.limit_price),
+        "notional": None,
+        "fee": None,
+        "status": "expired",
+        "reason": order.reason_code,
+        "strategy_version_id": order.strategy_version_id,
+        "realized_pnl": None,
     }
 
 
@@ -291,12 +319,20 @@ def _committee_evidence(
 
 @dataclass
 class _PermanentRunner:
-    """Cadenced committee loop for one permanent wallet."""
+    """Cadenced committee loop for one permanent wallet.
+
+    ``entry_limit_bps`` / ``exit_limit_bps`` place accumulate/reduce as RESTING
+    limit orders off the mark (0 = market). For Darkhorse - Daily these are read
+    from its live params dict and re-tuned by the daily LLM adaptation loop; for
+    Dark Horse they are fixed.
+    """
 
     slot: WalletSlot
     cadence_seconds: int
     accumulate_fraction: Decimal
     reduce_fraction: Decimal
+    entry_limit_bps: Decimal = Decimal("0")
+    exit_limit_bps: Decimal = Decimal("0")
     last_eval_ms: int | None = None
 
 
@@ -304,8 +340,14 @@ def _permanent_committee_intent(
     runner: _PermanentRunner,
     snapshot: MarketSnapshot,
     window: tuple[MarketSnapshot, ...],
-) -> tuple[Side, Decimal, str] | None:
-    """Evaluate the committee on cadence; map the decision to a spot order."""
+) -> tuple[Side, Decimal, str, Decimal | None] | None:
+    """Evaluate the committee on cadence; map the decision to a spot order.
+
+    Returns ``(side, quantity, reason, limit_price)`` — ``limit_price`` is
+    ``None`` for a market order. Accumulate rests a bid below the mark and
+    reduce rests an ask above it (both tunable); exit-to-cash is always a market
+    order because a risk-off exit must not sit unfilled on the book.
+    """
 
     if (runner.last_eval_ms is not None
             and snapshot.close_time_ms - runner.last_eval_ms
@@ -321,27 +363,42 @@ def _permanent_committee_intent(
         holds_btc=wallet.base_qty > 0,
     )
     px = snapshot.mark_price
+    limit_price: Decimal | None = None
     if decision.action is DarkHorseAction.ACCUMULATE:
         budget = quote(wallet.quote_cash * runner.accumulate_fraction)
         if budget < Decimal("10"):
             return None
-        qty = base_qty(budget / px)
+        if runner.entry_limit_bps > 0:
+            limit_price = quote(px * (Decimal(1) - runner.entry_limit_bps / Decimal(10_000)))
+        qty = base_qty(budget / (limit_price or px))
         side = Side.BUY
     elif decision.action is DarkHorseAction.REDUCE:
         qty = base_qty(wallet.base_qty * runner.reduce_fraction)
+        if runner.exit_limit_bps > 0:
+            limit_price = quote(px * (Decimal(1) + runner.exit_limit_bps / Decimal(10_000)))
         side = Side.SELL
     elif decision.action is DarkHorseAction.EXIT_TO_CASH:
         qty = base_qty(wallet.base_qty)
-        side = Side.SELL
+        side = Side.SELL  # urgent risk-off -> market (limit_price stays None)
     else:
         return None
     if qty <= 0:
         return None
-    return side, qty, decision.action.value
+    return side, qty, decision.action.value, limit_price
 
 
-def _permanent_runners(portfolio) -> list[_PermanentRunner]:
-    """Dark Horse on its 4h cadence; Darkhorse - Daily on its tuned cadence."""
+def _permanent_runners(portfolio,
+                       daily_params: dict | None = None) -> list[_PermanentRunner]:
+    """Dark Horse on its 4h cadence; Darkhorse - Daily on its tuned cadence.
+
+    ``daily_params`` overrides Darkhorse - Daily's tunables (fractions, cadence,
+    limit offsets); when omitted it uses ``default_params()``. The harness passes
+    freshly-adapted params here as the simulated days advance (Part E).
+
+    Dark Horse trades MARKET: a high-conviction 4h committee decision should act
+    now, not sit on the book (resting limits are natural for the mean-reversion
+    builtins and the adaptive daily wallet, not for a conviction accumulator).
+    """
 
     runners = []
     if portfolio.dark_horse is not None:
@@ -352,18 +409,21 @@ def _permanent_runners(portfolio) -> list[_PermanentRunner]:
             reduce_fraction=Decimal("0.50"),
         ))
     if portfolio.dark_horse_daily is not None:
-        params = default_params()
+        params = daily_params or default_params()
         runners.append(_PermanentRunner(
             slot=portfolio.dark_horse_daily,
             cadence_seconds=int(params["signal_cadence_hours"] * 3600),
             accumulate_fraction=params["accumulate_fraction"],
             reduce_fraction=params["reduce_fraction"],
+            entry_limit_bps=params.get("entry_limit_bps", Decimal("0")),
+            exit_limit_bps=params.get("exit_limit_bps", Decimal("0")),
         ))
     return runners
 
 
 def build_view(now: dt.datetime, live: bool = False,
-               interval: str = "5m") -> InMemoryPortfolioView:
+               interval: str = "5m",
+               llm_adapt: bool = False) -> InMemoryPortfolioView:
     filters = None
     market_note = "synthetic seeded walk (no network)"
     market_status = "synthetic"
@@ -403,14 +463,84 @@ def build_view(now: dt.datetime, live: bool = False,
     # 0.00001, not the 1-satoshi default), so fills obey the true venue rules.
     execution = (ExecutionService(model=ExecutionModel(filters=filters))
                  if filters else ExecutionService())
+    book = RestingBook()
+    _perm_slots = [p for p in (portfolio.dark_horse, portfolio.dark_horse_daily)
+                   if p is not None]
+    all_slots = portfolio.active + portfolio.shadow + _perm_slots
+    wallet_by_id = {s.wallet.wallet_id: s.wallet for s in all_slots}
+    version_by_id = {s.wallet.wallet_id: s.strategy_version_id for s in all_slots}
+
+    # Opt-in: the daily LLM re-tune loop. None => no adaptation (current
+    # behaviour, and the graceful fallback when the local model is down).
+    retuner = _build_retuner(portfolio) if llm_adapt else None
+    current_day: str | None = None
+    day_fills: dict[str, list[dict]] = {}
+
     trades: dict[str, list[dict]] = {}
     fills = 0
     seq = 0
+    prev = None
     n = len(market)
     for tick in range(1, n + 1):
         snapshot = market[tick - 1]
         window = market[max(0, tick - WINDOW):tick]
-        batch = []
+
+        # Day boundary: close out the completed day's lessons, adapt Darkhorse -
+        # Daily, and apply the new params before this day's candles replay.
+        day = _iso(snapshot.close_time_ms)[:10]
+        if retuner is not None and day != current_day:
+            if current_day is not None and prev is not None:
+                new_params = retuner.end_day(current_day, wallet_by_id,
+                                             prev.mark_price, version_by_id,
+                                             day_fills)
+                _apply_daily_params(permanents, new_params)
+            retuner.begin_day(wallet_by_id, snapshot.mark_price)
+            day_fills = {}
+            current_day = day
+
+        book.observe_spacing(snapshot, prev)
+        prev = snapshot
+        batch: list[tuple] = []
+        placed_ms_by_id: dict[str, int] = {}
+
+        # (1) Expire resting orders that have sat unfilled past their TTL.
+        for order in book.expire(snapshot):
+            trades.setdefault(order.wallet_id, []).append(
+                _expired_record(snapshot, order))
+        # (2) Resting orders the candle traded through become fills this tick.
+        for order in book.due_fills(snapshot):
+            seq += 1
+            iid = f"dev-i{seq}"
+            placed_ms_by_id[iid] = order.placed_open_ms
+            batch.append((wallet_by_id[order.wallet_id], OrderIntent(
+                intent_id=iid, wallet_id=order.wallet_id,
+                strategy_version_id=order.strategy_version_id,
+                side=order.side, order_type=OrderType.LIMIT,
+                quantity=order.quantity, limit_price=order.limit_price,
+                reason_code=order.reason_code,
+            )))
+
+        def place(wallet, version_id, side, order_type, qty, limit_price, reason):
+            """Market -> execute this tick; not-yet-marketable limit -> rest."""
+            nonlocal seq
+            seq += 1
+            iid = f"dev-i{seq}"
+            if order_type is OrderType.LIMIT and limit_price is not None:
+                # A limit placed at this close cannot fill on its own candle (the
+                # high/low already happened) — it rests and is checked next tick.
+                book.rest(RestingOrder(
+                    order_id=iid, wallet_id=wallet.wallet_id,
+                    strategy_version_id=version_id, side=side,
+                    limit_price=limit_price, quantity=qty, reason_code=reason,
+                    placed_open_ms=snapshot.open_time_ms))
+            else:
+                batch.append((wallet, OrderIntent(
+                    intent_id=iid, wallet_id=wallet.wallet_id,
+                    strategy_version_id=version_id, side=side,
+                    order_type=order_type, quantity=qty, limit_price=limit_price,
+                    reason_code=reason)))
+
+        # (3) Strategy wallets.
         for idx, (slot, strategy, state) in enumerate(runners):
             w = slot.wallet
             ctx = StrategyContext(
@@ -421,40 +551,39 @@ def build_view(now: dt.datetime, live: bool = False,
             decision = strategy.on_market_snapshot(ctx, state)
             runners[idx] = (slot, strategy, decision.state)
             for spec in decision.intents:
-                seq += 1
-                batch.append((w, OrderIntent(
-                    intent_id=f"dev-i{seq}", wallet_id=w.wallet_id,
-                    strategy_version_id=slot.strategy_version_id,
-                    side=spec.side, order_type=OrderType(spec.order_type),
-                    quantity=spec.quantity, limit_price=spec.limit_price,
-                    reason_code=spec.reason_code,
-                )))
-        # Permanent wallets trade against the SAME snapshot, via the real
-        # five-domain committee on their own cadences.
+                place(w, slot.strategy_version_id, spec.side,
+                      OrderType(spec.order_type), spec.quantity,
+                      spec.limit_price, spec.reason_code)
+
+        # (4) Permanent wallets: the real five-domain committee on their cadences.
         for pr in permanents:
             order = _permanent_committee_intent(pr, snapshot, window)
             if order is None:
                 continue
-            side, qty, reason = order
-            seq += 1
-            batch.append((pr.slot.wallet, OrderIntent(
-                intent_id=f"dev-i{seq}", wallet_id=pr.slot.wallet.wallet_id,
-                strategy_version_id=pr.slot.strategy_version_id,
-                side=side, order_type=OrderType.MARKET,
-                quantity=qty, limit_price=None,
-                reason_code=f"committee_{reason}",
-            )))
+            side, qty, reason, limit_price = order
+            place(pr.slot.wallet, pr.slot.strategy_version_id, side,
+                  OrderType.LIMIT if limit_price is not None else OrderType.MARKET,
+                  qty, limit_price, f"committee_{reason}")
+
+        # (5) Execute everything submitted this tick.
         intents_by_id = {intent.intent_id: intent for _, intent in batch}
         for result in execution.process_tick(snapshot, batch):
             fills += result.accepted
             intent = intents_by_id[result.intent_id]
-            trades.setdefault(result.wallet_id, []).append(
-                _trade_record(snapshot, intent, result))
+            record = _trade_record(snapshot, intent, result,
+                                   placed_ms=placed_ms_by_id.get(result.intent_id))
+            trades.setdefault(result.wallet_id, []).append(record)
+            if retuner is not None and result.accepted:
+                day_fills.setdefault(result.wallet_id, []).append(record)
 
+    if retuner is not None:
+        _print_adaptation_summary(retuner)
+    open_orders = book.snapshot_open()
     mark = market[-1].mark_price
+    resting = sum(len(v) for v in open_orders.values())
     print(f"[devserver] replayed {n} candles across "
           f"{len(portfolio.active) + len(portfolio.shadow) + len(permanents)} "
-          f"wallets -> {fills} fills")
+          f"wallets -> {fills} fills, {resting} orders still resting")
     print(f"[devserver] mark price {mark}  active equity "
           f"{portfolio.active_equity(mark)}  shadow {portfolio.shadow_equity(mark)}")
     for pr in permanents:
@@ -472,6 +601,7 @@ def build_view(now: dt.datetime, live: bool = False,
         portfolio=portfolio, mark_price=mark, now=now,
         archived_lifetime_pnl=Decimal("0.00"),
         trades_by_wallet=trades,
+        open_orders_by_wallet=open_orders,
         strategy_descriptions=descriptions,
         llm_healthy=llm_healthy,
         llm_model_id=llm_model,
@@ -529,20 +659,18 @@ def _set_source(view: InMemoryPortfolioView, source_id: str, status: str,
             return
 
 
-def probe_local_llm() -> tuple[bool, str]:
-    """Live health + model discovery against the configured llama.cpp host.
+def _build_llm_client():
+    """A LlamaCppClient over the allowlist-guarded httpx transport, or None.
 
-    Goes through the real LlamaCppClient over an httpx transport that is
-    constrained to the DataBroker's single permitted private destination. If the
-    model is down we report it as degraded rather than pretending.
+    Shared by the health probe and the daily re-tune loop. Returns
+    ``(client, model_id)`` on success or ``(None, "unavailable")`` when the model
+    is unreachable — callers then degrade rather than pretend.
     """
 
     import httpx
 
     from ..infrastructure.data_broker.policy import PolicyViolation, validate_request
     from ..infrastructure.llm.llama_cpp_client import LlamaCppClient, LlmConfig
-
-    config = LlmConfig()
 
     class HttpxTransport:
         """Every URL is revalidated against the allowlist before it is sent."""
@@ -557,19 +685,73 @@ def probe_local_llm() -> tuple[bool, str]:
             r = httpx.post(url, json=payload, timeout=60.0)
             return r.status_code, (r.json() if r.content else {})
 
-    client = LlamaCppClient(HttpxTransport(), config)
+    client = LlamaCppClient(HttpxTransport(), LlmConfig())
     try:
         if not client.health():
-            print("[devserver] local model: health check failed -> degraded")
-            return False, "unavailable"
-        model_id = client.discover_model()
-    except (httpx.HTTPError, PolicyViolation, Exception) as exc:
-        print(f"[devserver] local model unreachable ({type(exc).__name__}) -> degraded")
-        return False, "unavailable"
+            return None, "unavailable"
+        return client, client.discover_model()
+    except (httpx.HTTPError, PolicyViolation, Exception):
+        return None, "unavailable"
 
-    print(f"[devserver] local model OK: served id '{model_id}' "
-          f"(artifact {config.expected_model_artifact})")
+
+def probe_local_llm() -> tuple[bool, str]:
+    """Live health + model discovery against the configured llama.cpp host."""
+
+    client, model_id = _build_llm_client()
+    if client is None:
+        print("[devserver] local model unreachable -> degraded")
+        return False, "unavailable"
+    print(f"[devserver] local model OK: served id '{model_id}'")
     return True, model_id
+
+
+def _apply_daily_params(permanents, params: dict) -> None:
+    """Push freshly-adapted tunables onto the live Darkhorse - Daily runner."""
+
+    for pr in permanents:
+        if pr.slot.kind == "dark_horse_daily":
+            pr.accumulate_fraction = params["accumulate_fraction"]
+            pr.reduce_fraction = params["reduce_fraction"]
+            pr.cadence_seconds = int(params["signal_cadence_hours"] * 3600)
+            pr.entry_limit_bps = params["entry_limit_bps"]
+            pr.exit_limit_bps = params["exit_limit_bps"]
+
+
+def _build_retuner(portfolio):
+    """Assemble the daily LLM re-tuner, or None if the model is unavailable."""
+
+    from .harness_adaptation import DailyReTuner, LlmAnalyst, LlmProposer
+
+    if portfolio.dark_horse_daily is None:
+        return None
+    client, model_id = _build_llm_client()
+    if client is None:
+        print("[devserver] --llm-adapt requested but local model is down "
+              "-> daily wallet runs on default params (no adaptation)")
+        return None
+    print(f"[devserver] --llm-adapt ON: Darkhorse - Daily re-tunes each "
+          f"simulated day via '{model_id}'")
+    slot = portfolio.dark_horse_daily
+    return DailyReTuner(
+        daily_wallet_id=slot.wallet.wallet_id,
+        daily_version_id=slot.strategy_version_id,
+        params=default_params(),
+        analyst=LlmAnalyst(client),
+        proposer=LlmProposer(client),
+    )
+
+
+def _print_adaptation_summary(retuner) -> None:
+    changed = [a for a in retuner.history if not a.degraded and a.changed]
+    print(f"[devserver] daily adaptation: {len(retuner.history)} cycles, "
+          f"{len(changed)} changed the strategy")
+    for a in changed:
+        moves = ", ".join(f"{adj.parameter} {adj.previous_value}->{adj.new_value}"
+                          for adj in a.adjustments)
+        print(f"[devserver]   {a.date}: {moves}")
+    daily = retuner.params
+    print(f"[devserver] final daily limits: entry_bps={daily['entry_limit_bps']} "
+          f"exit_bps={daily['exit_limit_bps']}")
 
 
 def _port_in_use(host: str, port: int) -> bool:
@@ -603,6 +785,11 @@ def main(argv: list[str] | None = None) -> int:
                         help="fetch real BTCUSDT candles from Binance public "
                              "(no credentials required)")
     parser.add_argument("--interval", default="5m")
+    parser.add_argument("--llm-adapt", action="store_true",
+                        help="re-tune Darkhorse - Daily's parameters (including "
+                             "resting-limit offsets) each simulated day via the "
+                             "local model's daily lessons; degrades to no-op if "
+                             "the model is down. Off by default (deterministic).")
     args = parser.parse_args(argv)
 
     # Fail fast (before the expensive market replay) if the port is taken, so a
@@ -616,7 +803,8 @@ def main(argv: list[str] | None = None) -> int:
     import uvicorn
 
     now = dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
-    view = build_view(now, live=args.live, interval=args.interval)
+    view = build_view(now, live=args.live, interval=args.interval,
+                      llm_adapt=args.llm_adapt)
     if args.live:
         start_market_refresher(view, interval=args.interval)
         print(f"[devserver] market refresher running (every 15s, {args.interval} "

@@ -44,6 +44,19 @@ def test_s01_grid_buys_below_anchor_and_never_on_recenter_candle():
     assert state["anchor"] is not None
 
 
+def test_mean_reversion_rests_limit_below_but_breakout_stays_market():
+    from tradebot.strategies.builtin import DonchianBreakout
+    # Bollinger deep drop -> a resting LIMIT bid BELOW the mark.
+    closes = [Decimal(60000)] * 45 + [Decimal(59940)]
+    decs, _ = run_ticks(BollingerZScore(), series(closes))
+    b = buys(decs)[0]
+    assert b.order_type == "LIMIT" and b.limit_price < Decimal("59940")
+    # Donchian breakout entry must stay MARKET (a resting bid would miss it).
+    rising_closes = [Decimal(60000 + i * 60) for i in range(60)]
+    decs, _ = run_ticks(DonchianBreakout(), series(rising_closes))
+    assert all(i.order_type == "MARKET" for i in buys(decs))
+
+
 def test_s02_zscore_buys_deep_deviation_not_crash():
     closes = flat_noise(50) + [Decimal("59940")]  # sharp local drop ≈ many σ
     decisions, _ = run_ticks(BollingerZScore(), series(closes))

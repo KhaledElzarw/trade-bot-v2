@@ -28,6 +28,8 @@ class OscillatorExhaustion(BuiltinStrategy):
     stoch_overbought = Decimal("80")
     atr_target_mult = Decimal("2.0")
     time_stop = 30
+    entry_limit_bps = Decimal("15")  # rest the exhaustion bid below the mark
+    exit_limit_bps = Decimal("15")   # rest the ATR profit target above the mark
 
     def signal(self, context: StrategyContext,
                candles: tuple[MarketSnapshot, ...],
@@ -42,7 +44,8 @@ class OscillatorExhaustion(BuiltinStrategy):
         if not holding:
             recovery = last.close > last.open  # closed-candle recovery trigger
             if r <= self.rsi_oversold and k <= self.stoch_oversold and recovery:
-                return [self.buy_intent(context, "exhaustion_recovery")]
+                return [self.buy_intent(context, "exhaustion_recovery",
+                                        limit_bps=self.entry_limit_bps)]
             return []
 
         if r >= self.rsi_exit:
@@ -52,7 +55,8 @@ class OscillatorExhaustion(BuiltinStrategy):
         entry = self.entry_price(state)
         vol = atr(candles, self.rsi_period)
         if entry is not None and vol is not None and last.close >= entry + vol * self.atr_target_mult:
-            return [self.sell_all_intent(context, "atr_target")]
+            return [self.sell_all_intent(context, "atr_target",
+                                         limit_bps=self.exit_limit_bps)]
         if state.get("candles_held", 0) >= self.time_stop:
             return [self.sell_all_intent(context, "time_stop")]
         return []

@@ -118,6 +118,11 @@ table.wallets thead th {
 table.wallets tbody tr:hover { background: var(--panel-2); }
 table.wallets td { font-variant-numeric: tabular-nums; }
 
+th.sortable { cursor: pointer; user-select: none; }
+th.sortable:hover { color: var(--text); }
+th.sortable--active { color: var(--accent); }
+th.sortable:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
 .wallet-row { cursor: pointer; }
 .wallet-row:hover { background: var(--panel-2); }
 .wallet-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }

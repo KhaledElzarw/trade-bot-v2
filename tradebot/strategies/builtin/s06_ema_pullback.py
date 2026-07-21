@@ -24,6 +24,8 @@ class EmaPullback(BuiltinStrategy):
     slow = 50
     pullback_tolerance = Decimal("0.005")  # within 0.5% of EMA20
     profit_target = Decimal("0.03")
+    entry_limit_bps = Decimal("15")  # rest the pullback bid below the mark
+    exit_limit_bps = Decimal("20")   # rest the profit target above the mark
 
     def signal(self, context: StrategyContext,
                candles: tuple[MarketSnapshot, ...],
@@ -42,7 +44,8 @@ class EmaPullback(BuiltinStrategy):
             recovered = last.close > last.open and last.close > ema_fast
             if uptrend and touched and recovered:
                 return [self.buy_intent(context, "ema_pullback",
-                                        fraction=Decimal("0.35"))]
+                                        fraction=Decimal("0.35"),
+                                        limit_bps=self.entry_limit_bps)]
             return []
 
         # Trend structure failure ends the trade.
@@ -50,7 +53,8 @@ class EmaPullback(BuiltinStrategy):
             return [self.sell_all_intent(context, "trend_failure")]
         entry = self.entry_price(state)
         if entry is not None and last.close >= entry * (Decimal(1) + self.profit_target):
-            return [self.sell_all_intent(context, "profit_target")]
+            return [self.sell_all_intent(context, "profit_target",
+                                         limit_bps=self.exit_limit_bps)]
         return []
 
 

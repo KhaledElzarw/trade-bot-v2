@@ -100,6 +100,15 @@ def test_filters_cover_required_views():
         assert value in CODE
 
 
+def test_new_columns_and_sorting_are_present():
+    for key in ("unrealized_pnl", "total_fees", "open_orders", "completed_orders"):
+        assert f"'{key}'" in CODE, f"missing column: {key}"
+    # Sortable headers: comparator, aria-sort states, and toggle direction.
+    assert "compareWallets" in CODE
+    for token in ("aria-sort", "ascending", "descending"):
+        assert token in CODE
+
+
 def test_legacy_v1_dashboard_still_present_but_v2_is_clean():
     """The v1 file retains its innerHTML usage; v2 must not inherit it."""
     v1 = V2.with_name("dashboard.v1.js")

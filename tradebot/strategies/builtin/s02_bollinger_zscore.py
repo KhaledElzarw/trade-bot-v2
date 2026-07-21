@@ -26,6 +26,7 @@ class BollingerZScore(BuiltinStrategy):
     trend_period = 40
     trend_crash_pct = Decimal("0.10")  # 10% drop over trend window = downtrend
     time_stop = 30
+    entry_limit_bps = Decimal("15")  # rest the mean-reversion bid below the mark
 
     def signal(self, context: StrategyContext,
                candles: tuple[MarketSnapshot, ...],
@@ -43,9 +44,11 @@ class BollingerZScore(BuiltinStrategy):
             if crashing:
                 return []
             if z <= self.deep_z:
-                return [self.buy_intent(context, "z_deep", fraction=Decimal("0.40"))]
+                return [self.buy_intent(context, "z_deep", fraction=Decimal("0.40"),
+                                        limit_bps=self.entry_limit_bps)]
             if z <= self.entry_z:
-                return [self.buy_intent(context, "z_entry")]
+                return [self.buy_intent(context, "z_entry",
+                                        limit_bps=self.entry_limit_bps)]
             return []
 
         # Exits: mean touch, time stop, or thesis-invalidating downtrend.

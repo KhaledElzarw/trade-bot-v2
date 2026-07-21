@@ -168,24 +168,75 @@ const COLUMNS = [
   ['starting_equity', 'Starting'],
   ['current_equity', 'Equity'],
   ['lifetime_net_pnl', 'Lifetime P&L'],
+  ['unrealized_pnl', 'Unrealized P&L'],
+  ['total_fees', 'Fees'],
   ['btc_quantity', 'BTC'],
   ['usdt_quantity', 'USDT'],
+  ['open_orders', 'Open orders'],
+  ['completed_orders', 'Completed orders'],
   ['status', 'Status'],
   ['health', 'Health'],
 ];
 
-function renderWallets(root, wallets, onSelect) {
+/** Compare two wallet rows on `key`; numeric when both sides look numeric. */
+function compareWallets(a, b, key) {
+  const av = a[key], bv = b[key];
+  const numeric = (v) => typeof v === 'number'
+    || (typeof v === 'string' && v.trim() !== '' && /^-?\d/.test(v.trim()) && !isNaN(parseFloat(v)));
+  if (numeric(av) && numeric(bv)) return parseFloat(av) - parseFloat(bv);
+  return String(av === undefined || av === null ? '' : av)
+    .localeCompare(String(bv === undefined || bv === null ? '' : bv));
+}
+
+const SORT_GLYPH = { asc: ' ▲', desc: ' ▼' };
+
+function renderWallets(root, wallets, onSelect, sort) {
   clear(root);
   if (!Array.isArray(wallets) || wallets.length === 0) {
     root.appendChild(emptyNode('No wallets match this filter.'));
     return;
   }
 
+  // Shared, persisted across header clicks within this render.
+  const sortState = sort || { key: null, dir: 'asc' };
+
+  const rows = wallets.slice();
+  if (sortState.key) {
+    rows.sort((a, b) => compareWallets(a, b, sortState.key));
+    if (sortState.dir === 'desc') rows.reverse();
+  }
+
+  const onHeader = (key) => {
+    if (sortState.key === key) {
+      sortState.dir = sortState.dir === 'asc' ? 'desc' : 'asc';
+    } else {
+      sortState.key = key;
+      sortState.dir = 'asc';
+    }
+    renderWallets(root, wallets, onSelect, sortState);
+  };
+
   const head = el('tr', {
-    children: COLUMNS.map(([, label]) => el('th', { text: label, attrs: { scope: 'col' } })),
+    children: COLUMNS.map(([key, label]) => {
+      const active = sortState.key === key;
+      const th = el('th', {
+        className: active ? 'sortable sortable--active' : 'sortable',
+        text: label + (active ? SORT_GLYPH[sortState.dir] : ''),
+        attrs: {
+          scope: 'col', role: 'button', tabindex: '0',
+          'aria-sort': active ? (sortState.dir === 'asc' ? 'ascending' : 'descending') : 'none',
+          'aria-label': `Sort by ${label}`,
+        },
+      });
+      th.addEventListener('click', () => onHeader(key));
+      th.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onHeader(key); }
+      });
+      return th;
+    }),
   });
   const body = el('tbody', {
-    children: wallets.map((w) => {
+    children: rows.map((w) => {
       const row = el('tr', {
         className: 'wallet-row',
         attrs: { tabindex: '0', role: 'button',
@@ -286,6 +337,16 @@ const ORDER_COLUMNS = [
   ['reason', 'Reason'],
 ];
 
+// Resting orders carry a different (smaller) shape than filled history rows.
+const OPEN_ORDER_COLUMNS = [
+  ['side', 'Side'],
+  ['order_type', 'Type'],
+  ['limit_price', 'Limit price'],
+  ['quantity', 'Quantity'],
+  ['reason_code', 'Reason'],
+  ['status', 'Status'],
+];
+
 function overlayRoot() {
   let root = document.getElementById('wallet-detail');
   if (!root) {
@@ -320,17 +381,18 @@ function insightGrid(insights) {
 function orderTable(orders, caption) {
   if (!Array.isArray(orders) || orders.length === 0) {
     return emptyNode(caption === 'open'
-      ? 'No open orders — paper orders fill or reject on their candle.'
+      ? 'No resting orders right now — limit orders rest here until they fill or expire.'
       : 'No orders recorded for this wallet.');
   }
+  const columns = caption === 'open' ? OPEN_ORDER_COLUMNS : ORDER_COLUMNS;
   const head = el('tr', {
-    children: ORDER_COLUMNS.map(([, label]) =>
+    children: columns.map(([, label]) =>
       el('th', { text: label, attrs: { scope: 'col' } })),
   });
   const body = el('tbody', {
     children: orders.map((o) => el('tr', {
       className: o.status === 'rejected' ? 'order-row order-row--rejected' : 'order-row',
-      children: ORDER_COLUMNS.map(([key]) => {
+      children: columns.map(([key]) => {
         const v = o[key];
         return el('td', {
           className: key === 'side' ? `side side--${String(v).toLowerCase()}` : undefined,

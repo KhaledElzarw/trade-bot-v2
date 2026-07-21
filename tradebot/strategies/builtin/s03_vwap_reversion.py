@@ -27,6 +27,8 @@ class VwapReversion(BuiltinStrategy):
     min_rel_volume = Decimal("0.8")
     breakdown_rel_volume = Decimal("2.0")
     time_stop = 40
+    entry_limit_bps = Decimal("15")  # rest the discount bid below the mark
+    exit_limit_bps = Decimal("15")   # rest the profit target above the mark
 
     def signal(self, context: StrategyContext,
                candles: tuple[MarketSnapshot, ...],
@@ -45,13 +47,15 @@ class VwapReversion(BuiltinStrategy):
         if not holding:
             if (deviation <= self.entry_deviation
                     and rel_vol >= self.min_rel_volume and decelerating):
-                return [self.buy_intent(context, "vwap_entry")]
+                return [self.buy_intent(context, "vwap_entry",
+                                        limit_bps=self.entry_limit_bps)]
             return []
 
         if deviation >= 0:
             return [self.sell_all_intent(context, "vwap_touch")]
         if deviation >= self.target_deviation:
-            return [self.sell_all_intent(context, "vwap_target")]
+            return [self.sell_all_intent(context, "vwap_target",
+                                         limit_bps=self.exit_limit_bps)]
         if state.get("candles_held", 0) >= self.time_stop:
             return [self.sell_all_intent(context, "vwap_time_stop")]
         # Volume-confirmed breakdown: heavy volume and a new local low.

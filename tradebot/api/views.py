@@ -147,6 +147,8 @@ class InMemoryPortfolioView:
     def _wallet_dict(self, slot, kind: str) -> dict:
         w = slot.wallet
         equity = w.equity(self.mark_price)
+        completed = sum(1 for t in self.trades_by_wallet.get(w.wallet_id, [])
+                        if t.get("status") == "filled")
         return {
             "wallet_id": w.wallet_id,
             "display_name": display_name(slot, self.now),
@@ -158,9 +160,13 @@ class InMemoryPortfolioView:
             "starting_equity": "10000.00",
             "current_equity": money(equity),
             "lifetime_net_pnl": money(equity - Decimal("10000.00")),
+            "unrealized_pnl": money(w.unrealized_pnl(self.mark_price)),
+            "total_fees": money(w.total_fees),
             "btc_quantity": money(w.base_qty),
             "usdt_quantity": money(w.quote_cash),
             "realized_pnl": money(w.realized_pnl),
+            "open_orders": len(self.open_orders_by_wallet.get(w.wallet_id, [])),
+            "completed_orders": completed,
             "status": "active",
             "health": "ok",
         }

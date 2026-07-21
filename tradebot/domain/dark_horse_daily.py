@@ -59,6 +59,10 @@ TUNABLES: dict[str, ParamSpec] = {s.name: s for s in (
     _spec("reduce_fraction", "0.10", "1.00", "0.15", "0.50"),
     # Short-horizon evaluation cadence (hours between signal evaluations).
     _spec("signal_cadence_hours", "0.5", "4", "0.5", "1"),
+    # Resting-limit offset (basis points) for accumulate bids below the mark.
+    _spec("entry_limit_bps", "0", "60", "10", "15"),
+    # Resting-limit offset (basis points) for reduce asks above the mark.
+    _spec("exit_limit_bps", "0", "60", "10", "15"),
 )}
 
 
