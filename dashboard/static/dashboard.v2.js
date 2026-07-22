@@ -376,6 +376,7 @@ function overlayRoot() {
 }
 
 function closeWalletDetail() {
+  disposeCharts();
   const root = document.getElementById('wallet-detail');
   if (root) clear(root);
 }
@@ -433,9 +434,342 @@ function orderTable(orders, caption) {
   });
 }
 
-function renderWalletDetail(root, wallet, orders) {
+/* ------------------------------------------------------------ charts (LWC) */
+/*
+ * Charts are drawn with the self-hosted TradingView Lightweight Charts library
+ * (loaded from /static/vendor, so `script-src 'self'` is satisfied). The library
+ * is optional: when it is absent (unit tests, or a failed asset load) every
+ * mount is a no-op and the panel shows a plain empty state — no chart code ever
+ * reaches for innerHTML, matching the A14 posture of the rest of this file.
+ */
+
+const CHARTS_AVAILABLE = () => typeof LightweightCharts !== 'undefined';
+
+const CHART_THEME = {
+  layout: { background: { color: 'transparent' }, textColor: '#9aa4b6' },
+  grid: { vertLines: { color: 'rgba(255,255,255,0.04)' },
+          horzLines: { color: 'rgba(255,255,255,0.04)' } },
+  rightPriceScale: { borderColor: 'rgba(255,255,255,0.08)' },
+  timeScale: { borderColor: 'rgba(255,255,255,0.08)', timeVisible: true },
+};
+
+const UP = '#26a69a';
+const DOWN = '#ef5350';
+
+// Every chart instance we create is tracked so closing the modal disposes them.
+let activeCharts = [];
+
+function disposeCharts() {
+  for (const c of activeCharts) {
+    try { c.remove(); } catch { /* already gone */ }
+  }
+  activeCharts = [];
+}
+
+/** Create a themed chart sized to its container; tracked for disposal. */
+function makeChart(container, height) {
+  const chart = LightweightCharts.createChart(container, {
+    ...CHART_THEME,
+    width: container.clientWidth || 760,
+    height,
+    handleScale: true,
+    handleScroll: true,
+  });
+  activeCharts.push(chart);
+  // Keep the chart width in step with the (resizable/scrollable) modal.
+  if (typeof ResizeObserver !== 'undefined') {
+    const ro = new ResizeObserver(() => {
+      chart.applyOptions({ width: container.clientWidth || 760 });
+    });
+    ro.observe(container);
+  }
+  return chart;
+}
+
+function num(v) {
+  const n = parseFloat(v);
+  return isNaN(n) ? null : n;
+}
+
+/** Price panel: candles + this wallet's strategy overlays + trade markers. */
+function mountPriceChart(container, data) {
+  if (!CHARTS_AVAILABLE() || !data || !Array.isArray(data.candles) || data.candles.length === 0) {
+    container.appendChild(emptyNode('No price history to chart yet.'));
+    return;
+  }
+  const chart = makeChart(container, 300);
+  const candles = chart.addCandlestickSeries({
+    upColor: UP, downColor: DOWN, borderVisible: false,
+    wickUpColor: UP, wickDownColor: DOWN,
+  });
+  candles.setData(data.candles);
+
+  const lowerOverlays = (data.overlays || []).filter((o) => o.pane === 'lower');
+  for (const ov of (data.overlays || [])) {
+    if (ov.pane !== 'price') continue;
+    if (ov.kind === 'threshold') {
+      candles.createPriceLine({
+        price: num(ov.value), color: ov.color, lineWidth: 1,
+        lineStyle: 2, axisLabelVisible: false, title: ov.label || '',
+      });
+    } else if (Array.isArray(ov.points)) {
+      const s = chart.addLineSeries({
+        color: ov.color, lineWidth: 1, priceLineVisible: false,
+        lastValueVisible: false, crosshairMarkerVisible: false,
+      });
+      s.setData(ov.points);
+    }
+  }
+
+  if (Array.isArray(data.markers) && data.markers.length) {
+    candles.setMarkers(data.markers.map(markerFor));
+  }
+
+  // Optional lower oscillator pane, time-synced with the price pane.
+  if (lowerOverlays.length) {
+    const lowerBox = el('div', { className: 'chart chart--lower' });
+    container.parentElement.appendChild(lowerBox);
+    mountLowerPane(lowerBox, lowerOverlays, chart);
+  }
+  chart.timeScale().fitContent();
+}
+
+function markerFor(m) {
+  const t = m.time;
+  if (m.side === 'BUY') {
+    return { time: t, position: 'belowBar', color: '#4a90d9',
+             shape: 'arrowUp', text: 'B' };
+  }
+  const color = m.result === 'win' ? UP : m.result === 'loss' ? DOWN : '#9aa4b6';
+  return { time: t, position: 'aboveBar', color, shape: 'arrowDown', text: 'S' };
+}
+
+/** Lower pane: oscillator line overlays + threshold guides, synced to `priceChart`. */
+function mountLowerPane(container, overlays, priceChart) {
+  const chart = makeChart(container, 130);
+  let anchor = null;
+  for (const ov of overlays) {
+    if (ov.kind === 'line' && Array.isArray(ov.points)) {
+      const s = chart.addLineSeries({
+        color: ov.color, lineWidth: 1, priceLineVisible: false,
+        lastValueVisible: false,
+      });
+      s.setData(ov.points);
+      if (!anchor) anchor = s;
+    }
+  }
+  if (!anchor) {
+    anchor = chart.addLineSeries({ color: 'transparent' });
+    anchor.setData(overlays[0] && overlays[0].points ? overlays[0].points : []);
+  }
+  for (const ov of overlays) {
+    if (ov.kind === 'threshold') {
+      anchor.createPriceLine({
+        price: num(ov.value), color: ov.color, lineWidth: 1,
+        lineStyle: 2, axisLabelVisible: false, title: ov.label || '',
+      });
+    }
+  }
+  syncTimeScales(priceChart, chart);
+  chart.timeScale().fitContent();
+}
+
+/** Two-way visible-range sync so stacked panes scroll/zoom together. */
+function syncTimeScales(a, b) {
+  const ats = a.timeScale();
+  const bts = b.timeScale();
+  let guard = false;
+  const link = (from, to) => from.subscribeVisibleLogicalRangeChange((r) => {
+    if (guard || !r) return;
+    guard = true;
+    to.setVisibleLogicalRange(r);
+    guard = false;
+  });
+  link(ats, bts);
+  link(bts, ats);
+}
+
+/** Performance panel: equity (right scale) + realized/unrealized/fees (left). */
+function mountPerfChart(container, points) {
+  if (!CHARTS_AVAILABLE() || !Array.isArray(points) || points.length === 0) {
+    container.appendChild(emptyNode('No performance history yet.'));
+    return;
+  }
+  const chart = makeChart(container, 240);
+  chart.applyOptions({ leftPriceScale: { visible: true,
+    borderColor: 'rgba(255,255,255,0.08)' } });
+
+  // `tone` maps to a CSS class so the swatch/label colour matches the line
+  // WITHOUT an inline style (blocked by the CSP's `style-src 'self'`).
+  const series = [
+    { key: 'equity', label: 'Balance', color: '#4a90d9', tone: 'balance', scale: 'right' },
+    { key: 'realized_pnl', label: 'Realized P&L', color: UP, tone: 'realized', scale: 'left' },
+    { key: 'unrealized_pnl', label: 'Unrealized P&L', color: '#f5a623', tone: 'unrealized', scale: 'left' },
+    { key: 'fees', label: 'Fees', color: '#c56be6', tone: 'fees', scale: 'left' },
+  ];
+  const legend = el('div', { className: 'chart-legend' });
+  for (const def of series) {
+    const s = chart.addLineSeries({
+      color: def.color, lineWidth: 2, priceScaleId: def.scale,
+      priceLineVisible: false, lastValueVisible: false,
+    });
+    s.setData(points.map((p) => ({ time: p.time, value: num(p[def.key]) }))
+      .filter((d) => d.value !== null));
+    legend.appendChild(legendItem(def.label, def.tone, s));
+  }
+  container.parentElement.appendChild(legend);
+  chart.timeScale().fitContent();
+}
+
+/** A clickable legend chip that toggles its series' visibility. `tone` is a
+ * colour class (not an inline style, which the CSP forbids) matching the line. */
+function legendItem(label, tone, series) {
+  let visible = true;
+  const swatch = el('span', {
+    className: `chart-legend__swatch chart-legend__swatch--${tone}` });
+  const chip = el('button', {
+    className: `chart-legend__item chart-legend__item--${tone}`,
+    attrs: { type: 'button', 'aria-pressed': 'true', 'aria-label': `Toggle ${label}` },
+    children: [swatch, el('span', { text: label })],
+  });
+  chip.addEventListener('click', () => {
+    visible = !visible;
+    series.applyOptions({ visible });
+    chip.setAttribute('aria-pressed', String(visible));
+    chip.classList.toggle('chart-legend__item--off', !visible);
+  });
+  return chip;
+}
+
+/** Exposure panel: percentage of equity held in BTC over time. */
+function mountExposureChart(container, points) {
+  if (!CHARTS_AVAILABLE() || !Array.isArray(points) || points.length === 0) {
+    container.appendChild(emptyNode('No exposure history yet.'));
+    return;
+  }
+  const chart = makeChart(container, 140);
+  const area = chart.addAreaSeries({
+    lineColor: '#4a90d9', topColor: 'rgba(74,144,217,0.35)',
+    bottomColor: 'rgba(74,144,217,0.02)', lineWidth: 2,
+    priceLineVisible: false, lastValueVisible: true,
+  });
+  area.setData(points.map((p) => ({ time: p.time, value: num(p.exposure_pct) }))
+    .filter((d) => d.value !== null));
+  chart.timeScale().fitContent();
+}
+
+/* --------------------------------------------------- analytics panel (DOM) */
+
+/** Small labelled stat tile. */
+function statTile(label, value) {
+  return el('div', {
+    className: 'stat',
+    children: [
+      el('span', { className: 'stat__label', text: label }),
+      el('span', { className: 'stat__value',
+        text: value === undefined || value === null ? '—' : value }),
+    ],
+  });
+}
+
+const ACTIVITY_TILES = [
+  ['trade_count', 'Trades'],
+  ['buy_count', 'Buys'],
+  ['sell_count', 'Sells'],
+  ['win_count', 'Wins'],
+  ['loss_count', 'Losses'],
+  ['win_rate', 'Win rate'],
+  ['avg_win', 'Avg win'],
+  ['avg_loss', 'Avg loss'],
+  ['profit_factor', 'Profit factor'],
+];
+
+function activityStrip(activity) {
+  const strip = el('div', { className: 'stat-strip' });
+  for (const [key, label] of ACTIVITY_TILES) {
+    strip.appendChild(statTile(label, activity ? activity[key] : null));
+  }
+  return strip;
+}
+
+/** Strategy metric blocks — rendered generically from whatever the backend
+ * returns for the wallet's CURRENT strategy, so it follows reassignments. */
+function strategyPanel(blocks, reasons) {
+  const wrap = el('div', { className: 'strategy-panel' });
+  const list = Array.isArray(blocks) ? blocks : [];
+  for (const block of list) {
+    const rows = el('div', { className: 'kv' });
+    for (const r of (block.rows || [])) {
+      rows.appendChild(el('div', {
+        className: 'kv__row',
+        children: [
+          el('span', { className: 'kv__k', text: r.label }),
+          el('span', { className: 'kv__v',
+            text: r.value === undefined || r.value === null ? '—' : r.value }),
+        ],
+      }));
+    }
+    wrap.appendChild(el('div', {
+      className: 'strategy-block',
+      children: [el('h4', { className: 'strategy-block__title', text: block.title }), rows],
+    }));
+  }
+  if (Array.isArray(reasons) && reasons.length) {
+    const rows = el('div', { className: 'kv' });
+    for (const r of reasons) {
+      rows.appendChild(el('div', {
+        className: 'kv__row',
+        children: [
+          el('span', { className: 'kv__k', text: r.reason }),
+          el('span', { className: 'kv__v', text: String(r.count) }),
+        ],
+      }));
+    }
+    wrap.appendChild(el('div', {
+      className: 'strategy-block',
+      children: [el('h4', { className: 'strategy-block__title', text: 'Fills by reason' }), rows],
+    }));
+  }
+  if (!wrap.firstChild) wrap.appendChild(emptyNode('No strategy metrics for this wallet.'));
+  return wrap;
+}
+
+/**
+ * Build the analytics section (charts + panels). Chart containers are created
+ * now but only *mounted* after the section is in the DOM (Lightweight Charts
+ * needs a laid-out container to size itself), so mount callbacks are collected
+ * into `pending` and run by the caller.
+ */
+function analyticsSection(wallet, chartData, timeseries, pending) {
+  const priceBox = el('div', { className: 'chart chart--price' });
+  const perfBox = el('div', { className: 'chart chart--perf' });
+  const expoBox = el('div', { className: 'chart chart--expo' });
+  pending.push(() => mountPriceChart(priceBox, chartData));
+  pending.push(() => mountPerfChart(perfBox, timeseries));
+  pending.push(() => mountExposureChart(expoBox, timeseries));
+
+  return el('div', {
+    className: 'analytics',
+    children: [
+      el('h3', { className: 'detail__h', text: 'Price · indicators · trades' }),
+      el('div', { className: 'chart-wrap', children: [priceBox] }),
+      el('h3', { className: 'detail__h', text: 'Performance' }),
+      el('div', { className: 'chart-wrap', children: [perfBox] }),
+      el('h3', { className: 'detail__h', text: 'Exposure (% of equity in BTC)' }),
+      el('div', { className: 'chart-wrap', children: [expoBox] }),
+      el('h3', { className: 'detail__h', text: 'Activity' }),
+      activityStrip(wallet.activity),
+      el('h3', { className: 'detail__h', text: 'Strategy' }),
+      strategyPanel(wallet.strategy_metrics, wallet.reason_breakdown),
+    ],
+  });
+}
+
+function renderWalletDetail(root, wallet, orders, chartData, timeseries) {
   clear(root);
+  disposeCharts();
   const openOrders = (wallet && wallet.open_orders) || [];
+  const pending = [];
 
   const closeBtn = el('button', {
     className: 'detail__close', text: '✕',
@@ -453,7 +787,8 @@ function renderWalletDetail(root, wallet, orders) {
         text: `${wallet.strategy_name || '—'} · ${wallet.strategy_version_id || '—'} · ${wallet.kind || ''}` }),
       el('p', { className: 'detail__desc',
         text: wallet.strategy_description || 'No strategy description available.' }),
-      el('h3', { className: 'detail__h', text: 'Performance' }),
+      analyticsSection(wallet, chartData, timeseries, pending),
+      el('h3', { className: 'detail__h', text: 'Performance snapshot' }),
       insightGrid(wallet.insights),
       el('h3', { className: 'detail__h', text: 'Open orders' }),
       orderTable(openOrders, 'open'),
@@ -466,6 +801,12 @@ function renderWalletDetail(root, wallet, orders) {
   backdrop.addEventListener('click', (e) => { if (e.target === backdrop) closeWalletDetail(); });
   root.appendChild(backdrop);
   closeBtn.focus();
+
+  // Charts need a laid-out container to size themselves — mount now that the
+  // panel is in the DOM. Failures never break the rest of the detail view.
+  for (const mount of pending) {
+    try { mount(); } catch { /* leave the empty state in place */ }
+  }
 }
 
 async function openWalletDetail(walletId) {
@@ -476,11 +817,15 @@ async function openWalletDetail(walletId) {
     children: [el('div', { className: 'detail__panel', children: [loadingNode()] })],
   }));
   try {
-    const [wallet, ordersResp] = await Promise.all([
-      getJson(`/wallets/${encodeURIComponent(walletId)}`),
-      getJson(`/wallets/${encodeURIComponent(walletId)}/orders`),
+    const id = encodeURIComponent(walletId);
+    const [wallet, ordersResp, chartData, tsResp] = await Promise.all([
+      getJson(`/wallets/${id}`),
+      getJson(`/wallets/${id}/orders`),
+      getJson(`/wallets/${id}/chart`).catch(() => null),
+      getJson(`/wallets/${id}/timeseries`).catch(() => ({ points: [] })),
     ]);
-    renderWalletDetail(root, wallet, ordersResp.orders || []);
+    renderWalletDetail(root, wallet, ordersResp.orders || [], chartData,
+                       (tsResp && tsResp.points) || []);
   } catch {
     clear(root);
     const box = el('div', { className: 'detail__panel', children: [
@@ -648,5 +993,5 @@ if (typeof document !== 'undefined' && document.readyState !== 'loading') {
 
 /* Exported for tests (Node/jsdom). */
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { el, clear, safeUrl, safeLink, renderSummary, renderWallets, renderFilters, stateNode, renderWalletDetail, insightGrid, orderTable, renderInsights, buySellNode };
+  module.exports = { el, clear, safeUrl, safeLink, renderSummary, renderWallets, renderFilters, stateNode, renderWalletDetail, insightGrid, orderTable, renderInsights, buySellNode, activityStrip, strategyPanel, markerFor, analyticsSection };
 }

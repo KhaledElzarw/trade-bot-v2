@@ -599,6 +599,7 @@ def build_view(now: dt.datetime, live: bool = False,
 
     return InMemoryPortfolioView(
         portfolio=portfolio, mark_price=mark, now=now,
+        candles=tuple(market),
         archived_lifetime_pnl=Decimal("0.00"),
         trades_by_wallet=trades,
         open_orders_by_wallet=open_orders,

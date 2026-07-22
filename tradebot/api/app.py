@@ -149,6 +149,14 @@ def _register_routes(app: FastAPI, view: PortfolioView, require_token) -> None:
     def wallet_equity(wallet_id: str) -> dict:
         return {"points": view.wallet_equity(wallet_id)}
 
+    @app.get("/api/v2/wallets/{wallet_id}/timeseries")
+    def wallet_timeseries(wallet_id: str) -> dict:
+        return {"points": view.wallet_timeseries(wallet_id)}
+
+    @app.get("/api/v2/wallets/{wallet_id}/chart")
+    def wallet_chart(wallet_id: str) -> dict:
+        return view.wallet_chart(wallet_id)
+
     @app.get("/api/v2/wallets/{wallet_id}/orders")
     def wallet_orders(wallet_id: str) -> dict:
         return {"orders": view.wallet_orders(wallet_id)}

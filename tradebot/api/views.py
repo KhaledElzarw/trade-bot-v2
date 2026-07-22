@@ -19,7 +19,9 @@ from ..application.portfolio import (
     Portfolio,
     display_name,
 )
+from ..domain.market import MarketSnapshot
 from ..domain.money import quote
+from . import chart_overlays, strategy_panel, timeseries
 
 
 def money(value: Decimal) -> str:
@@ -40,6 +42,8 @@ class PortfolioView(Protocol):  # pragma: no cover - structural protocol
     def wallets(self, kind: str | None = None) -> list[dict]: ...
     def wallet(self, wallet_id: str) -> dict | None: ...
     def wallet_equity(self, wallet_id: str) -> list[dict]: ...
+    def wallet_timeseries(self, wallet_id: str) -> list[dict]: ...
+    def wallet_chart(self, wallet_id: str) -> dict: ...
     def wallet_orders(self, wallet_id: str) -> list[dict]: ...
     def wallet_fills(self, wallet_id: str) -> list[dict]: ...
     def wallet_ledger(self, wallet_id: str) -> list[dict]: ...
@@ -63,6 +67,7 @@ class InMemoryPortfolioView:
     portfolio: Portfolio
     mark_price: Decimal
     now: dt.datetime
+    candles: tuple[MarketSnapshot, ...] = ()
     archived_lifetime_pnl: Decimal = Decimal("0.00")
     llm_healthy: bool = True
     llm_model_id: str = "unknown"
@@ -271,6 +276,14 @@ class InMemoryPortfolioView:
                     slot.strategy_version_id, "")
                 detail["insights"] = self._insights(slot)
                 detail["open_orders"] = self.wallet_open_orders(wallet_id)
+                fills = self.wallet_orders(wallet_id)
+                w = slot.wallet
+                detail["strategy_metrics"] = strategy_panel.strategy_metrics(
+                    slot.strategy_name, self.candles,
+                    base_qty=w.base_qty, avg_cost=w.avg_cost,
+                    mark_price=self.mark_price, quote_cash=w.quote_cash)
+                detail["activity"] = timeseries.activity_stats(fills)
+                detail["reason_breakdown"] = timeseries.reason_breakdown(fills)
                 return detail
         return None
 
@@ -303,11 +316,60 @@ class InMemoryPortfolioView:
             "win_rate": win_rate,
         }
 
+    def wallet_timeseries(self, wallet_id: str) -> list[dict]:
+        """Balance / P&L / fees / exposure reconstructed per closed candle.
+
+        Deterministically replayed from this wallet's own fills over the retained
+        candle window — nothing is fabricated. A wallet with no fills yields a
+        flat starting-capital line; no candles yields an empty series.
+        """
+
+        if self.wallet(wallet_id) is None:
+            return []
+        return timeseries.build_series(
+            self.candles, self.wallet_orders(wallet_id))
+
     def wallet_equity(self, wallet_id: str) -> list[dict]:
+        """Equity curve (subset of the timeseries), kept for the existing route.
+
+        Falls back to a single current-equity point when no candles are retained
+        (e.g. the pure in-memory test view), preserving the original contract.
+        """
+
+        series = self.wallet_timeseries(wallet_id)
+        if series:
+            return [{"time": p["time"], "equity": p["equity"]} for p in series]
         found = self.wallet(wallet_id)
         if found is None:
             return []
         return [{"time": self.now.isoformat(), "equity": found["current_equity"]}]
+
+    def wallet_chart(self, wallet_id: str) -> dict:
+        """Candles + strategy indicator overlays + trade markers for the price
+        panel. Empty/missing wallets and empty candle sets render as themselves."""
+
+        empty = {"candles": [], "overlays": [], "markers": []}
+        found = None
+        target = None
+        for slot, _kind in self._slots():
+            if slot.wallet.wallet_id == wallet_id:
+                found, target = slot, slot.wallet
+                break
+        if found is None:
+            return empty
+
+        candle_rows = [{
+            "time": c.close_time_ms // 1000,
+            "open": float(c.open), "high": float(c.high),
+            "low": float(c.low), "close": float(c.close),
+        } for c in self.candles]
+
+        fills = self.wallet_orders(wallet_id)
+        overlays = chart_overlays.overlays_for(found.strategy_name, self.candles)
+        overlays += chart_overlays.ladder_lines(
+            self.wallet_open_orders(wallet_id), money(target.avg_cost))
+        markers = chart_overlays.markers_from_fills(fills)
+        return {"candles": candle_rows, "overlays": overlays, "markers": markers}
 
     def wallet_orders(self, wallet_id: str) -> list[dict]:
         """Full order history (filled + rejected), newest first."""
