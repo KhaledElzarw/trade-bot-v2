@@ -2,8 +2,10 @@
 
 **A self-evolving BTCUSDT paper-trading research platform.** Twenty-five isolated
 wallets compete every week. Losers are eliminated and permanently banned. A local
-LLM writes their replacements. Nothing is trusted — not the model, not the market
-data, not the generated code.
+LLM writes their replacements. The platform live-trades every closed 5-minute
+candle, refreshes its market awareness hourly from real cited sources, and
+survives restarts via atomic snapshots. Nothing is trusted — not the model, not
+the market data, not the generated code.
 
 > **Paper trading only.** No real exchange orders are ever placed and no funds are
 > held. Nothing here is a profitability claim or investment advice.
@@ -21,6 +23,9 @@ data, not the generated code.
 | **1 Dark Horse** | Permanent wallet, never reset, exempt from elimination |
 | **140,000 USDT** | Active baseline (12 × 10k + Dark Horse + Darkhorse - Daily) |
 | **Local Qwen** | Writes and mutates strategies autonomously via llama.cpp |
+| **Continuous live loop** | Polls Binance every 15s; every newly closed 5m candle is traded by all wallets |
+| **Hourly awareness** | CoinGecko + mempool.space + news RSS, synthesized into a cited brief by the local LLM |
+| **Restart persistence** | Versioned atomic snapshots; startup restores and gap-replays instead of resetting |
 
 Every week: rank by profit → eliminate every loser and every zero-trade strategy →
 permanently ban their code **and structure** → generate `ceil(n/2)` novel +
@@ -127,6 +132,12 @@ What live mode actually does:
 
 - backfills 1000 real 5m candles and replays them through the real execution
   engine;
+- then **keeps trading**: a `LiveLoop` polls Binance every 15s and runs every
+  wallet plus the permanent committee on each newly *closed* 5m candle —
+  replay, live trading, and outage catch-up all share one idempotent
+  `TickEngine` code path;
+- replays any gap (downtime, network outage) in order on reconnect —
+  parity-tested against an uninterrupted run;
 - fetches the **real** exchange filters — Binance's actual `LOT_SIZE` step is
   `0.00001`, not the 1-satoshi default, so fills obey true venue rules;
 - **excludes the in-progress candle** — only completed bars ever drive a
@@ -162,11 +173,21 @@ the GGUF filename. (It currently resolves to `Qwen3-VL-30B-A3B-Instruct`.) If th
 model is down the platform reports **degraded** and keeps trading; it never
 fabricates analysis.
 
+### Market awareness
+
+Every hour an `AwarenessService` pulls CoinGecko market stats, mempool.space
+on-chain data, and news RSS — all through the same deny-by-default DataBroker —
+and has the local model synthesize a structured, **cited** brief. It replaces the
+old synthetic macro/fundamental/on-chain placeholders and degrades honestly: a
+stale brief is capped and falls back to the placeholder rather than pretending
+to be fresh. Exposed at `/system/awareness` and on the dashboard's
+market-awareness panel; `/system/live` reports the trading heartbeat.
+
 ## Quality
 
 | Gate | Result |
 |------|--------|
-| Tests | **430** new-package / **833** full suite |
+| Tests | **947** passing (full suite) |
 | Coverage (`tradebot/*`) | **97%** (ratchet; see [docs/testing.md](docs/testing.md)) |
 | Ruff / Mypy | clean (63 files) |
 | Bandit / pip-audit | **0 issues** / no known vulnerabilities |
@@ -191,7 +212,5 @@ The new `tradebot` package is a release candidate, not a finished replacement:
 - Coverage is **97%, not 100%**.
 - Frontend has static safety analysis; no jsdom/Playwright suite yet.
 - The legacy flat modules still exist and still carry their original findings.
-- Live mode backfills and re-marks, but does not yet re-run strategy
-  decisions as new bars close (that is the scheduler's job).
 
 Full detail in [`docs/release-checklist.md`](docs/release-checklist.md).

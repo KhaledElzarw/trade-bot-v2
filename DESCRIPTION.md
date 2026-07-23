@@ -1,1 +1,1 @@
-Evolution — AI-assisted local product prototype for paper/testnet workflow automation, dashboard operations, SQLite persistence, runtime monitoring, security controls and optional advisory AI review.
+Evolution — self-evolving BTCUSDT paper-trading research platform: 25 competing wallets, weekly elimination and permanent bans, replacement strategies written by a local LLM and run in sandboxes, continuous live trading on every closed 5m candle, hourly cited market-awareness briefs, restart-safe snapshots. Paper trading only.
