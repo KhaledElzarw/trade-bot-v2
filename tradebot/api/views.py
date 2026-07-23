@@ -191,6 +191,19 @@ class InMemoryPortfolioView:
                 else:
                     open_sell += 1
 
+        # Orders filled in the trailing 24h (every wallet), split by side.
+        cutoff = (self.now - dt.timedelta(hours=24)).isoformat() + "Z"
+        day_buy = day_sell = 0
+        for rows in self.trades_by_wallet.values():
+            for t in rows:
+                filled_at = t.get("filled_at")
+                if (t.get("status") == "filled" and filled_at
+                        and filled_at >= cutoff):
+                    if t.get("side") == "BUY":
+                        day_buy += 1
+                    else:
+                        day_sell += 1
+
         most_active = max(real, key=fills_of)
 
         def perf(slot) -> dict:
@@ -210,6 +223,8 @@ class InMemoryPortfolioView:
                              "pct_in_btc": f"{pct_in_btc:.1f}%"},
             "open_orders": {"total": open_buy + open_sell,
                             "buys": open_buy, "sells": open_sell},
+            "fills_24h": {"total": day_buy + day_sell,
+                          "buys": day_buy, "sells": day_sell},
             "most_active": {"display_name": display_name(most_active, self.now),
                             "fills": fills_of(most_active)},
             "dark_horse": (perf(self.portfolio.dark_horse)

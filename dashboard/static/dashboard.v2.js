@@ -883,10 +883,14 @@ const INSIGHT_CARDS = [
     sub: () => 'of the real book' },
   { key: 'total_fills', label: 'Total fills',
     value: (d) => d.total_fills, sub: (d) => `Fees paid ${d.total_fees}` },
+  { key: 'fills_24h', label: 'Orders filled (24h)',
+    split: (d) => d.fills_24h,
+    sub: (d) => d.fills_24h && `${d.fills_24h.total} total · buys / sells` },
   { key: 'btc_exposure', label: 'BTC exposure',
     value: (d) => d.btc_exposure && d.btc_exposure.value,
     sub: (d) => d.btc_exposure && `${d.btc_exposure.btc} BTC · ${d.btc_exposure.pct_in_btc} of equity` },
-  { key: 'open_orders', label: 'Resting orders', splitOrders: true,
+  { key: 'open_orders', label: 'Resting orders',
+    split: (d) => d.open_orders,
     sub: (d) => d.open_orders && `${d.open_orders.total} total` },
   { key: 'most_active', label: 'Most active',
     value: (d) => d.most_active && `${d.most_active.fills} fills`,
@@ -911,8 +915,9 @@ function renderInsights(root, data) {
   if (!data) { root.appendChild(emptyNode('Insights unavailable.')); return; }
   for (const card of INSIGHT_CARDS) {
     const valueNode = el('span', { className: 'insight-card__value' });
-    if (card.splitOrders && data.open_orders) {
-      valueNode.appendChild(buySellNode(data.open_orders.buys, data.open_orders.sells));
+    const splitData = card.split ? card.split(data) : null;
+    if (splitData) {
+      valueNode.appendChild(buySellNode(splitData.buys, splitData.sells));
     } else {
       const v = card.value ? card.value(data) : data[card.key];
       valueNode.textContent = v === undefined || v === null ? '—' : v;

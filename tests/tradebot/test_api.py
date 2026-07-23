@@ -222,6 +222,23 @@ def test_portfolio_insights_shape_and_route():
     assert client().get("/api/v2/portfolio/insights").status_code == 200
 
 
+def test_insights_count_fills_in_trailing_24h_by_side():
+    view = make_view()
+    wid = view.portfolio.active[0].wallet.wallet_id
+    recent = (NOW - dt.timedelta(hours=2)).isoformat() + "Z"
+    old = (NOW - dt.timedelta(hours=30)).isoformat() + "Z"
+    view.trades_by_wallet[wid] = [
+        {"status": "filled", "side": "BUY", "filled_at": recent},
+        {"status": "filled", "side": "BUY", "filled_at": recent},
+        {"status": "filled", "side": "SELL", "filled_at": recent},
+        {"status": "filled", "side": "SELL", "filled_at": old},   # outside 24h
+        {"status": "rejected", "side": "BUY", "filled_at": None},  # never filled
+        {"status": "expired", "side": "SELL", "filled_at": None},
+    ]
+    day = view.portfolio_insights()["fills_24h"]
+    assert day == {"total": 3, "buys": 2, "sells": 1}
+
+
 def test_wallet_drilldown_exposes_orders_insights_and_description():
     view = make_view()
     wid = view.portfolio.active[0].wallet.wallet_id
